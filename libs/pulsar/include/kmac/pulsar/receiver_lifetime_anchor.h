@@ -156,7 +156,7 @@ public:
 
 /// @brief Shorter alias for ReceiverLifetimeAnchor.
 template< typename Owner >
-using RAnchor = ReceiverLifetimeAnchor< Owner >;
+using RLAnchor = ReceiverLifetimeAnchor< Owner >;
 
 template< typename Owner >
 ReceiverLifetimeAnchor< Owner >::ReceiverLifetimeAnchor( Owner* owner )

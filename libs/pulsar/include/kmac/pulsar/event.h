@@ -90,6 +90,57 @@
 namespace kmac {
 namespace pulsar {
 
+namespace detail {
+
+template< typename Receiver, typename... HandlerArgs, size_t... IndexSequence, typename... EventArgs >
+auto makePartialHandlerImpl(
+	Receiver* raw,
+	void ( Receiver::*method )( HandlerArgs... ),
+	std::index_sequence< IndexSequence... >,
+	std::tuple< EventArgs... >* )
+{
+	return [ raw, method ]( EventArgs... args )
+	{
+		auto argTuple = std::forward_as_tuple( std::forward< EventArgs >( args )... );
+		( raw->*method )(
+			std::forward< std::tuple_element_t< IndexSequence, std::tuple< EventArgs... > > >(
+				std::get< IndexSequence >( argTuple ) )... );
+	};
+}
+
+/**
+ * @brief Supports partial-argument connections.
+ *
+ * Wraps a member function pointer in a lambda that accepts the event's full
+ * argument list (EventArgs...) but forwards only the first sizeof...(HandlerArgs)
+ * arguments to the method.  This enables partial argument matching: a slot with
+ * fewer parameters than the event compiles and silently drops trailing args.
+ *
+ * The EventArgs... pack is provided by the connect overload (which knows Args...)
+ * and passed as a null type-tag pointer so it participates in deduction.
+ * HandlerArgs... is deduced from the method pointer.
+ *
+ * A static_assert fires at connect time if the handler requests more arguments
+ * than the event provides, giving a clear error rather than a substitution maze.
+ * @param raw
+ */
+template< typename... EventArgs, typename Receiver, typename... HandlerArgs >
+auto makePartialHandler(
+	Receiver* raw,
+	void ( Receiver::*method )( HandlerArgs... ) )
+{
+	static_assert( sizeof...( HandlerArgs ) <= sizeof...( EventArgs ),
+		"Handler has more arguments than the event provides" );
+
+	return makePartialHandlerImpl(
+		raw, method,
+		std::make_index_sequence< sizeof...( HandlerArgs ) >{},
+		static_cast< std::tuple< EventArgs... >* >( nullptr ) );
+}
+
+} // namespace detail
+
+
 /**
  * @brief Type-safe event with automatic connection lifecycle management.
  *
@@ -681,9 +732,7 @@ Connection Event< Args...>::connect( std::shared_ptr< ReceiverType > receiver, v
 	// capture raw pointer to avoid circular reference,
 	// safe because ConnectionImpl::canInvoke() checks _receiver.expired() before calling the lambda
 	ReceiverType* rawReceiver = receiver.get();
-	auto handler = [ rawReceiver, method ]( Args... args ) {
-		( rawReceiver->*method )( std::forward< Args >( args )... );
-	};
+	auto handler = detail::makePartialHandler< Args... >( rawReceiver, method );
 
 	return connect( receiver, std::move( handler ), type );
 }
@@ -696,9 +745,7 @@ Connection Event< Args... >::connect( ReceiverLifetimeAnchor< Owner >& anchor, v
 	// anchor.object() is the shared_ptr<Object> that serves as the lifetime
 	// token - connections are severed when the anchor destructs and resets it
 	Owner* rawOwner = anchor.owner();
-	auto handler = [ rawOwner, method ]( Args... args ) {
-		( rawOwner->*method )( std::forward< Args >( args )... );
-	};
+	auto handler = detail::makePartialHandler< Args... >( rawOwner, method );
 
 	return connect( anchor.object(), std::move( handler ), type );
 }
@@ -754,9 +801,7 @@ Connection Event< Args...>::connectOnce( std::shared_ptr< ReceiverType > receive
 	static_assert( std::is_base_of< Object, ReceiverType >::value, "Receiver must derive from Object" );
 
 	ReceiverType* rawReceiver = receiver.get();
-	auto handler = [ rawReceiver, method ]( Args... args ) {
-		( rawReceiver->*method )( std::forward< Args >( args )... );
-	};
+	auto handler = detail::makePartialHandler< Args... >( rawReceiver, method );
 
 	// connect with default priority (0)
 	return connectInternal( receiver, std::move( handler ), type, true, 0 );
@@ -791,10 +836,11 @@ Connection Event< Args...>::connectIf( std::shared_ptr< ReceiverType > receiver,
 	static_assert( std::is_base_of< Object, ReceiverType >::value, "Receiver must derive from Object" );
 
 	ReceiverType* rawReceiver = receiver.get();
-	auto conditionalHandler = [ rawReceiver, method, condition = std::forward< ConditionFunc >( condition ) ] ( Args... args ) mutable {
+	auto partialMethod = detail::makePartialHandler< Args... >( rawReceiver, method );
+	auto conditionalHandler = [ partialMethod, condition = std::forward< ConditionFunc >( condition ) ] ( Args... args ) mutable {
 		if ( condition( args... ) )
 		{
-			( rawReceiver->*method )( std::forward< Args >( args )... );
+			partialMethod( std::forward< Args >( args )... );
 		}
 	};
 
@@ -815,9 +861,7 @@ Connection Event< Args...>::connectWithPriority( std::shared_ptr< ReceiverType >
 	static_assert( std::is_base_of< Object, ReceiverType >::value, "Receiver must derive from Object" );
 
 	ReceiverType* rawReceiver = receiver.get();
-	auto handler = [ rawReceiver, method ]( Args... args ) {
-		( rawReceiver->*method )( std::forward< Args >( args )... );
-	};
+	auto handler = detail::makePartialHandler< Args... >( rawReceiver, method );
 
 	return connectInternal( receiver, std::move( handler ), type, false, priority );
 }

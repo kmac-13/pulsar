@@ -284,17 +284,17 @@ private:
 	// Helpers for printing tuples
 	// -------------------------------------------------------------------------
 
-	template< typename OStream, typename Tuple, size_t... Is >
-	void printTupleImpl( OStream& out, const Tuple& t, std::index_sequence< Is... > ) const;
+	template< typename OStream, typename Tuple, size_t... IndexSequence >
+	void printTupleImpl( OStream& out, const Tuple& t, std::index_sequence< IndexSequence... > ) const;
 
 	template< typename OStream, typename Tuple >
 	void printTuple( OStream& out, const Tuple& t ) const;
 
-	template< size_t... Is >
-	std::string writeTupleCSVHeader( std::index_sequence< Is... > ) const;
+	template< size_t... IndexSequence >
+	std::string writeTupleCSVHeader( std::index_sequence< IndexSequence... > ) const;
 
-	template< typename Tuple, size_t... Is >
-	std::string writeTupleCSVImpl( const Tuple& t, std::index_sequence< Is... > ) const;
+	template< typename Tuple, size_t... IndexSequence >
+	std::string writeTupleCSVImpl( const Tuple& t, std::index_sequence< IndexSequence... > ) const;
 
 	template< typename Tuple >
 	std::string writeTupleCSV( const Tuple& t ) const;
@@ -667,11 +667,11 @@ void EventRecorder< Args... >::exportToCSV( const std::string& filename ) const
 }
 
 template< typename... Args >
-template< typename OStream, typename Tuple, size_t... Is >
-void EventRecorder< Args... >::printTupleImpl( OStream& out, const Tuple& t, std::index_sequence< Is... > ) const
+template< typename OStream, typename Tuple, size_t... IndexSequence >
+void EventRecorder< Args... >::printTupleImpl( OStream& out, const Tuple& t, std::index_sequence< IndexSequence... > ) const
 {
 	out << "(";
-	( ( out << ( Is == 0 ? "" : ", " ) << std::get< Is >( t ) ), ... );
+	( ( out << ( IndexSequence == 0 ? "" : ", " ) << std::get< IndexSequence >( t ) ), ... );
 	out << ")";
 }
 
@@ -683,20 +683,20 @@ void EventRecorder< Args... >::printTuple( OStream& out, const Tuple& t ) const
 }
 
 template< typename... Args >
-template< size_t... Is >
-std::string EventRecorder< Args... >::writeTupleCSVHeader( std::index_sequence< Is... > ) const
+template< size_t... IndexSequence >
+std::string EventRecorder< Args... >::writeTupleCSVHeader( std::index_sequence< IndexSequence... > ) const
 {
 	std::ostringstream oss;
-	( ( oss << ",Arg" << Is ), ... );
+	( ( oss << ",Arg" << IndexSequence ), ... );
 	return oss.str();
 }
 
 template< typename... Args >
-template< typename Tuple, size_t... Is >
-std::string EventRecorder< Args... >::writeTupleCSVImpl( const Tuple& t, std::index_sequence< Is... > ) const
+template< typename Tuple, size_t... IndexSequence >
+std::string EventRecorder< Args... >::writeTupleCSVImpl( const Tuple& t, std::index_sequence< IndexSequence... > ) const
 {
 	std::ostringstream oss;
-	( ( oss << "," << std::get< Is >( t ) ), ... );
+	( ( oss << "," << std::get< IndexSequence >( t ) ), ... );
 	return oss.str();
 }
 

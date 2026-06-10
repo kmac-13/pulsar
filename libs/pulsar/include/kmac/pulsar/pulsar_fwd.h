@@ -64,6 +64,9 @@ class EventRecorder;
 template< typename... Args >
 class EventInspector;
 
+template< typename Owner >
+class ReceiverLifetimeAnchor;
+
 // ============================================================================
 // Signal / emit terminology aliases
 // Provided for users migrating from Qt or Boost.Signals2.

@@ -78,6 +78,7 @@
 #include "inspection_info.h"
 #include "event_loop.h"
 #include "object.h"
+#include "receiver_lifetime_anchor.h"
 
 #include <algorithm>
 #include <atomic>
@@ -338,6 +339,36 @@ public:
 	Connection connect(
 		std::shared_ptr< ReceiverType > receiver,
 		void ( ReceiverType::*method )( HandlerArgs... ),
+		ConnectionType type = ConnectionType::Auto );
+
+	/**
+	 * @brief Connect a member function via a ReceiverLifetimeAnchor.
+	 *
+	 * Allows any class to receive events without inheriting from Object or
+	 * being shared_ptr-managed.  The anchor provides both the lifetime token
+	 * (its internal Object) and the raw owner pointer used to call the method.
+	 *
+	 * @code
+	 * class Controller
+	 * {
+	 * public:
+	 *     void onValue( const int& v ) { ... }
+	 *     pulsar::ReceiverLifetimeAnchor< Controller > pulsarAnchor { this };
+	 * };
+	 *
+	 * Controller ctrl;
+	 * event.connect( ctrl.pulsarAnchor, &Controller::onValue );
+	 * @endcode
+	 *
+	 * @param anchor the ReceiverLifetimeAnchor embedded in the receiver
+	 * @param method pointer-to-member-function on Owner
+	 * @param type connection type
+	 * @return Connection handle
+	 */
+	template< typename Owner, typename... HandlerArgs >
+	Connection connect(
+		ReceiverLifetimeAnchor< Owner >& anchor,
+		void ( Owner::*method )( HandlerArgs... ),
 		ConnectionType type = ConnectionType::Auto );
 
 	/**
@@ -655,6 +686,21 @@ Connection Event< Args...>::connect( std::shared_ptr< ReceiverType > receiver, v
 	};
 
 	return connect( receiver, std::move( handler ), type );
+}
+
+template< typename... Args >
+template< typename Owner, typename... HandlerArgs >
+Connection Event< Args... >::connect( ReceiverLifetimeAnchor< Owner >& anchor, void ( Owner::*method )( HandlerArgs... ), ConnectionType type )
+{
+	// anchor.owner() is a raw pointer into the enclosing owner object,
+	// anchor.object() is the shared_ptr<Object> that serves as the lifetime
+	// token - connections are severed when the anchor destructs and resets it
+	Owner* rawOwner = anchor.owner();
+	auto handler = [ rawOwner, method ]( Args... args ) {
+		( rawOwner->*method )( std::forward< Args >( args )... );
+	};
+
+	return connect( anchor.object(), std::move( handler ), type );
 }
 
 template< typename... Args >

@@ -33,6 +33,41 @@ enum class ConnectionType
 };
 
 /**
+ * @brief Controls when and in whose context a connectIf() predicate is evaluated.
+ *
+ * @see Event::connectIf()
+ */
+enum class PredicateContext
+{
+	/**
+	 * Predicate is evaluated at emission time inside @c triggerImpl(), before
+	 * any queuing occurs.  If the predicate returns false the connection is
+	 * skipped entirely - nothing is queued.
+	 *
+	 * Safe when the predicate inspects sender state or event arguments that
+	 * may change between emission and deferred invocation, and when the
+	 * predicate is safe to call on the sender's thread.  For Direct
+	 * connections the timing difference is irrelevant since emission and
+	 * invocation are synchronous.
+	 */
+	Sender,
+
+	/**
+	 * Predicate is evaluated immediately before the handler runs, in the same
+	 * context as the handler itself.  For Direct connections this is the
+	 * triggering thread; for Deferred connections this is the receiver's
+	 * EventLoop drain thread at dequeue time.
+	 *
+	 * This is the default.  Safe when the predicate inspects only the event
+	 * arguments, atomic state, or state that is stable for the duration of
+	 * the connection's lifetime.  Not suitable when the predicate must reflect
+	 * conditions at the exact moment of emission, since state may have changed
+	 * between emission and dequeue for Deferred connections.
+	 */
+	Receiver,
+};
+
+/**
  * @brief Lifecycle state of an EventRecorder.
  */
 enum class RecordingMode

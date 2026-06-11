@@ -195,6 +195,7 @@ struct SharedLock
 	explicit SharedLock( M& ) {}
 };
 
+#ifndef PULSAR_CUSTOM_ATOMIC
 /**
  * @brief Non-atomic volatile value for single-threaded / bare-metal targets.
  *
@@ -218,7 +219,6 @@ struct SharedLock
  *
  * @tparam T value type; should be trivially copyable
  */
-#ifndef PULSAR_CUSTOM_ATOMIC
 template< typename T >
 class Atomic
 {

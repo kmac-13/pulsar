@@ -36,6 +36,32 @@
  * the handler.  Auto (the default) picks Direct when both objects share a
  * loop at trigger-time, Deferred otherwise.
  *
+ * @section partial_args Partial Argument Matching
+ *
+ * Member function handlers (connected via pointer-to-member) may accept fewer
+ * arguments than the event provides.  Trailing arguments are silently dropped
+ * at compile time with no runtime cost:
+ *
+ * @code
+ * // Event<int, int> - handler takes only the first argument
+ * event.connect( receiver, &Receiver::onValue );   // void onValue(int) - OK
+ * event.connect( receiver, &Receiver::onFire );    // void onFire()     - OK
+ * @endcode
+ *
+ * Lambda and functor handlers do not get this treatment - the lambda's
+ * parameter list must exactly match the event's argument types.  If you want
+ * to ignore trailing arguments, declare them as unnamed parameters:
+ *
+ * @code
+ * // Event<int, int>
+ * event.connect( receiver, []( int a, int ) { use(a); } );  // OK - second param unnamed
+ * event.connect( receiver, []( int a ) { use(a); } );       // compile error
+ * event.connect( receiver, []() { doSomething(); } );       // compile error
+ * @endcode
+ *
+ * The lambda is the workaround for signature mismatches - you have full
+ * control over the parameter list, so partial dropping is not needed.
+ *
  * @section lifetime Lifetime Management
  *
  * Connections are automatically severed when either the sender or receiver is
@@ -90,6 +116,29 @@
 namespace kmac {
 namespace pulsar {
 
+// ============================================================================
+// detail::makePartialHandler
+//
+// Wraps a member function pointer in a lambda that accepts the event's full
+// argument list (EventArgs...) but forwards only the first sizeof...(HandlerArgs)
+// arguments to the method.  This enables partial argument matching for
+// member function connections: a method with fewer parameters than the event
+// compiles and silently drops trailing args.
+//
+// This applies to member function pointer connections only.  Lambda and
+// functor connections are stored and called directly with Args..., so their
+// parameter lists must exactly match the event's argument types.  Lambdas
+// do not need partial dropping because the engineer controls the signature
+// directly - unnamed parameters are the idiomatic way to ignore trailing args.
+//
+// The EventArgs... pack is provided by the connect overload (which knows Args...)
+// and passed as a null type-tag pointer so it participates in deduction.
+// HandlerArgs... is deduced from the method pointer.
+//
+// A static_assert fires at connect time if the handler requests more arguments
+// than the event provides, giving a clear error rather than a substitution maze.
+// ============================================================================
+
 namespace detail {
 
 template< typename Receiver, typename... HandlerArgs, size_t... IndexSequence, typename... EventArgs >
@@ -97,16 +146,7 @@ auto makePartialHandlerImpl(
 	Receiver* raw,
 	void ( Receiver::*method )( HandlerArgs... ),
 	std::index_sequence< IndexSequence... >,
-	std::tuple< EventArgs... >* )
-{
-	return [ raw, method ]( EventArgs... args )
-	{
-		auto argTuple = std::forward_as_tuple( std::forward< EventArgs >( args )... );
-		( raw->*method )(
-			std::forward< std::tuple_element_t< IndexSequence, std::tuple< EventArgs... > > >(
-				std::get< IndexSequence >( argTuple ) )... );
-	};
-}
+	std::tuple< EventArgs... >* );
 
 /**
  * @brief Supports partial-argument connections.
@@ -125,18 +165,7 @@ auto makePartialHandlerImpl(
  * @param raw
  */
 template< typename... EventArgs, typename Receiver, typename... HandlerArgs >
-auto makePartialHandler(
-	Receiver* raw,
-	void ( Receiver::*method )( HandlerArgs... ) )
-{
-	static_assert( sizeof...( HandlerArgs ) <= sizeof...( EventArgs ),
-		"Handler has more arguments than the event provides" );
-
-	return makePartialHandlerImpl(
-		raw, method,
-		std::make_index_sequence< sizeof...( HandlerArgs ) >{},
-		static_cast< std::tuple< EventArgs... >* >( nullptr ) );
-}
+auto makePartialHandler( Receiver* raw, void ( Receiver::*method )( HandlerArgs... ) );
 
 } // namespace detail
 
@@ -175,7 +204,7 @@ private:
 		ConnectionType _type;               ///< Direct, Deferred, or Auto
 		EventLoop* _loop;                   ///< target loop for explicit Deferred or Auto resolved to Deferred connections; nullptr for Direct and Auto
 		bool _singleShot;                   ///< disconnect automatically after first invocation
-		std::atomic< bool > _migrating;     ///< true while setEventLoop() migration is in progress
+		platform::Atomic< bool > _migrating;  ///< true while setEventLoop() migration is in progress
 
 	public:
 		ConnectionImpl(
@@ -284,6 +313,19 @@ private:
 		virtual bool matchesReceiver( const Object* receiver ) const = 0;
 		virtual bool matchesHandler( const void* funcPtr ) const = 0;
 		virtual ConnectionInfo getInfo() const = 0;
+
+		/**
+		 * @brief Evaluate the sender-context predicate at emission time.
+		 *
+		 * Returns true by default - only overridden by connections created
+		 * with connectIf() and PredicateContext::Sender.  The override
+		 * calls the stored predicate with the emission arguments; if it returns
+		 * false, triggerImpl() skips the connection entirely.
+		 *
+		 * The default implementation is a non-virtual inline returning true,
+		 * so the common case (no sender-context predicate) has no overhead.
+		 */
+		virtual bool evaluateSenderPredicate( Args... );
 	};
 
 	template< typename HandlerFunc >
@@ -314,17 +356,44 @@ private:
 		ConnectionInfo getInfo() const override;
 	};
 
+	/**
+	 * @brief ConnectionWrapper variant that holds a sender-context predicate.
+	 *
+	 * Created only when connectIf() is called with
+	 * PredicateContext::Sender.  Overrides evaluateSenderPredicate() so
+	 * that triggerImpl() can call it before deciding whether to queue or
+	 * invoke the connection.
+	 *
+	 * @tparam HandlerFunc the handler callable type
+	 * @tparam ConditionFunc the predicate callable type: bool(Args...)
+	 */
+	template< typename HandlerFunc, typename ConditionFunc >
+	class ConditionalConnectionWrapper : public ConnectionWrapper< HandlerFunc >
+	{
+	private:
+		ConditionFunc _condition;
+
+	public:
+		ConditionalConnectionWrapper(
+			std::shared_ptr< ConnectionImpl< HandlerFunc > > impl,
+			int priority,
+			const void* funcPtr,
+			ConditionFunc condition );
+
+		bool evaluateSenderPredicate( Args... args ) override;
+	};
+
 private:
-	Object* _senderObj;                         ///< the Object that owns this event
-	std::atomic< bool > _destroying { false };  ///< set in destructor to prevent re-entrant removeConnection
+	Object* _senderObj;                              ///< the Object that owns this event
+	platform::Atomic< bool > _destroying { false };  ///< set in destructor to prevent re-entrant removeConnection
 	mutable platform::SharedMutex _mutex;
 	std::vector< std::unique_ptr< ConnectionWrapperBase > > _connections;  ///< sorted by descending priority
 
 public:
 	/**
-	 * @brief Construct an event belonging to @p sender.
+	 * @brief Construct an event belonging to sender.
 	 *
-	 * @p sender must outlive the Event.  Typically @p sender is @c this of
+	 * sender must outlive the Event.  Typically sender is this of
 	 * the enclosing Object:
 	 * @code
 	 * pulsar::Event<int> valueChanged{this};
@@ -363,10 +432,16 @@ public:
 	/**
 	 * @brief Connect a lambda or functor to this event.
 	 *
+	 * The handler's parameter list must exactly match the event's argument
+	 * types (Args...).  To ignore trailing arguments, declare them as
+	 * unnamed parameters - e.g. [](int, int){} for an Event<int,int>
+	 * where only the first argument is needed.  See partial_args for
+	 * the distinction between lambda and member-function connections.
+	 *
 	 * @param receiver shared ownership of the receiving Object, the connection
 	 *   is automatically severed when receiver is destroyed
-	 * @param handler any callable with a signature compatible with void(Args...),
-	 *   move-only captures (e.g. std::unique_ptr) are supported
+	 * @param handler callable with signature void(Args...), move-only
+	 *   captures (e.g. std::unique_ptr) are supported
 	 * @param type connection type, Auto (default) resolves at trigger-time
 	 * @return Connection handle for manual lifecycle control
 	 */
@@ -379,10 +454,15 @@ public:
 	/**
 	 * @brief Connect a member function pointer to this event.
 	 *
+	 * The handler may accept fewer arguments than the event provides -
+	 * trailing arguments are silently dropped at compile time.  See
+	 * @ref partial_args for details and the distinction from lambda
+	 * connections.
+	 *
 	 * @param receiver shared ownership of the receiver, ReceiverType must derive
 	 *   from Object
 	 * @param method pointer-to-member-function, the receiver is captured as a
-	 *   raw pointer inside the lambda (no circular reference)
+	 *   raw pointer inside the generated lambda (no circular reference)
 	 * @param type connection type
 	 * @return Connection handle
 	 */
@@ -475,19 +555,24 @@ public:
 	/**
 	 * @brief Connect a handler that is only invoked when @p condition returns true.
 	 *
-	 * The condition predicate is evaluated on the same thread as the handler,
-	 * immediately before the handler runs.  For Direct connections this is the
-	 * triggering thread; for Deferred connections this is the receiver's EventLoop
-	 * drain thread at dequeue time.
-	 *
-	 * Predicates that inspect only the event arguments or atomic state are safe
-	 * for any connection type.  Predicates that inspect non-atomic receiver state
-	 * should not be used with Deferred connections, as that state may have changed
-	 * between emission and dequeue.
+	 * The handler's parameter list must exactly match the event's argument
+	 * types (Args...) - the same requirement as the lambda connect()
+	 * overload.  See partial_args.  The condition predicate always
+	 * receives the full Args... regardless of context.
 	 *
 	 * @param receiver shared ownership of the receiver
-	 * @param handler callable invoked when @p condition returns true
-	 * @param condition predicate receiving the same arguments as the event
+	 * @param handler callable with signature void(Args...) invoked when
+	 *   condition returns true
+	 * @param condition predicate with signature bool(Args...)
+	 * @param context when the predicate is evaluated:
+	 *   - PredicateContext::Receiver (default) - evaluated at invocation
+	 *     time in the receiver's context, immediately before the handler runs.
+	 *     For Deferred connections the predicate sees state at dequeue time,
+	 *     not emission time.
+	 *   - PredicateContext::Sender - evaluated at emission time in
+	 *     triggerImpl(), before any queuing occurs.  If false the
+	 *     connection is skipped entirely.  Predicate must be safe to call
+	 *     on the sender's thread.
 	 * @param type connection type (default: Auto)
 	 * @return Connection handle
 	 */
@@ -496,14 +581,21 @@ public:
 		std::shared_ptr< Object > receiver,
 		HandlerFunc&& handler,
 		ConditionFunc&& condition,
+		PredicateContext context = PredicateContext::Receiver,
 		ConnectionType type = ConnectionType::Auto );
 
 	/**
 	 * @brief Connect a member function with a condition predicate.
 	 *
+	 * The handler may accept fewer arguments than the event provides -
+	 * trailing arguments are silently dropped at compile time.  The
+	 * condition predicate always receives the full Args... regardless
+	 * of the handler's arity or context.
+	 *
 	 * @param receiver shared ownership of the receiver
-	 * @param method pointer-to-member-function
-	 * @param condition predicate called with the event args
+	 * @param method pointer-to-member-function; trailing args may be omitted
+	 * @param condition predicate with signature bool(Args...)
+	 * @param context when the predicate is evaluated (see lambda overload)
 	 * @param type connection type
 	 * @return Connection handle
 	 */
@@ -512,6 +604,7 @@ public:
 		std::shared_ptr< ReceiverType > receiver,
 		void ( ReceiverType::*method )( HandlerArgs... ),
 		ConditionFunc&& condition,
+		PredicateContext context = PredicateContext::Receiver,
 		ConnectionType type = ConnectionType::Auto );
 
 	/**
@@ -646,6 +739,21 @@ private:
 		HandlerFunc&& handler,
 		ConnectionType type,
 		bool singleShot,
+		int priority );
+
+	/**
+	 * @brief Internal connect path for PredicateContext::Sender connections.
+	 *
+	 * Creates a ConditionalConnectionWrapper that stores the predicate and
+	 * overrides evaluateSenderPredicate() so triggerImpl() can call it before
+	 * deciding whether to queue or invoke the connection.
+	 */
+	template< typename HandlerFunc, typename ConditionFunc >
+	Connection connectInternalWithSenderPredicate(
+		std::shared_ptr< Object > receiver,
+		HandlerFunc&& handler,
+		ConditionFunc&& condition,
+		ConnectionType type,
 		int priority );
 };
 
@@ -816,9 +924,20 @@ Connection Event< Args...>::connectOnceFree( HandlerFunc&& handler )
 
 template< typename... Args >
 template< typename HandlerFunc, typename ConditionFunc >
-Connection Event< Args...>::connectIf( std::shared_ptr< Object > receiver, HandlerFunc&& handler, ConditionFunc&& condition, ConnectionType type )
+Connection Event< Args...>::connectIf( std::shared_ptr< Object > receiver, HandlerFunc&& handler, ConditionFunc&& condition, PredicateContext context, ConnectionType type )
 {
-	// wrap the handler and condition together - condition is evaluated at invocation time
+	if ( context == PredicateContext::Sender )
+	{
+		return connectInternalWithSenderPredicate(
+			receiver,
+			std::forward< HandlerFunc >( handler ),
+			std::forward< ConditionFunc >( condition ),
+			type,
+			0 );   // priority
+	}
+
+	// otherwise, Receiver context: wrap the handler and condition together -
+	// condition is evaluated at invocation time
 	auto conditionalHandler = [ handler = std::forward< HandlerFunc >( handler ), condition = std::forward< ConditionFunc >( condition ) ] ( Args... args ) mutable {
 		if ( condition( args... ) )
 		{
@@ -831,12 +950,23 @@ Connection Event< Args...>::connectIf( std::shared_ptr< Object > receiver, Handl
 
 template< typename... Args >
 template< typename ReceiverType, typename... HandlerArgs, typename ConditionFunc >
-Connection Event< Args...>::connectIf( std::shared_ptr< ReceiverType > receiver, void ( ReceiverType::*method )( HandlerArgs... ), ConditionFunc&& condition, ConnectionType type )
+Connection Event< Args...>::connectIf( std::shared_ptr< ReceiverType > receiver, void ( ReceiverType::*method )( HandlerArgs... ), ConditionFunc&& condition, PredicateContext context, ConnectionType type )
 {
 	static_assert( std::is_base_of< Object, ReceiverType >::value, "Receiver must derive from Object" );
 
 	ReceiverType* rawReceiver = receiver.get();
 	auto partialMethod = detail::makePartialHandler< Args... >( rawReceiver, method );
+
+	if ( context == PredicateContext::Sender )
+	{
+		return connectInternalWithSenderPredicate(
+			receiver,
+			std::move( partialMethod ),
+			std::forward< ConditionFunc >( condition ),
+			type,
+			0 );   // priority
+	}
+
 	auto conditionalHandler = [ partialMethod, condition = std::forward< ConditionFunc >( condition ) ] ( Args... args ) mutable {
 		if ( condition( args... ) )
 		{
@@ -1042,6 +1172,14 @@ void Event< Args...>::triggerImpl( Args... args )
 			ConnectionHolder holder{ conn.get(), base };
 			ConnectionType connType = conn->type();
 
+			// evaluate sender-context predicate before queuing or invoking;
+			// the default implementation returns true (no predicate) so this
+			// is a single virtual call with no overhead for normal connections
+			if ( ! conn->evaluateSenderPredicate( args... ) )
+			{
+				continue;
+			}
+
 			if ( connType == ConnectionType::Direct )
 			{
 				directConnections.push_back( holder );
@@ -1183,9 +1321,51 @@ Connection Event< Args...>::connectInternal( std::shared_ptr< Object > receiver,
 }
 
 
+template< typename... Args >
+template< typename HandlerFunc, typename ConditionFunc >
+Connection Event< Args... >::connectInternalWithSenderPredicate(
+	std::shared_ptr< Object > receiver,
+	HandlerFunc&& handler,
+	ConditionFunc&& condition,
+	ConnectionType type,
+	int priority )
+{
+	platform::UniqueLock< platform::SharedMutex > lock( _mutex );
+
+	EventLoop* receiverLoop = receiver ? receiver->eventLoop() : nullptr;
+	EventLoop* loop = ( type == ConnectionType::Deferred ) ? receiverLoop : nullptr;
+
+	auto senderPtr = _senderObj ? _senderObj->shared_from_this() : std::shared_ptr< Object >();
+
+	auto connImpl = std::make_shared< ConnectionImpl< HandlerFunc > >(
+		this, senderPtr, receiver, std::forward< HandlerFunc >( handler ), type, loop, false );
+
+	auto wrapper = std::make_unique< ConditionalConnectionWrapper< HandlerFunc, std::decay_t< ConditionFunc > > >(
+		connImpl, priority, nullptr, std::forward< ConditionFunc >( condition ) );
+
+	auto insertPos = std::upper_bound(
+		_connections.begin(),
+		_connections.end(),
+		priority,
+		[]( int prio, const std::unique_ptr< ConnectionWrapperBase >& conn ) {
+			return prio > conn->priority();
+		} );
+
+	_connections.insert( insertPos, std::move( wrapper ) );
+
+	return Connection( connImpl );
+}
+
+
 //
 // CONNECTION IMPL
 //
+
+template< typename... Args >
+bool Event< Args... >::ConnectionWrapperBase::evaluateSenderPredicate( Args... )
+{
+	return true;
+}
 
 template< typename... Args >
 template< typename HandlerFunc >
@@ -1642,6 +1822,63 @@ ConnectionInfo Event< Args... >::ConnectionWrapper< HandlerFunc >::getInfo() con
 
 	return info;
 }
+
+template< typename... Args >
+template< typename HandlerFunc, typename ConditionFunc >
+Event< Args... >::ConditionalConnectionWrapper< HandlerFunc, ConditionFunc >::ConditionalConnectionWrapper(
+	std::shared_ptr< ConnectionImpl< HandlerFunc > > impl,
+	int priority,
+	const void* funcPtr,
+	ConditionFunc condition )
+	: ConnectionWrapper< HandlerFunc >( impl, priority, funcPtr )
+	, _condition( std::move( condition ) )
+{
+}
+
+template< typename... Args >
+template< typename HandlerFunc, typename ConditionFunc >
+bool Event< Args... >::ConditionalConnectionWrapper< HandlerFunc, ConditionFunc >::evaluateSenderPredicate( Args... args )
+{
+	return _condition( args... );
+}
+
+
+//
+// DETAILS
+//
+
+namespace detail {
+
+template< typename Receiver, typename... HandlerArgs, size_t... IndexSequence, typename... EventArgs >
+auto makePartialHandlerImpl(
+	Receiver* raw,
+	void ( Receiver::*method )( HandlerArgs... ),
+	std::index_sequence< IndexSequence... >,
+	std::tuple< EventArgs... >* )
+{
+	return [ raw, method ]( EventArgs... args )
+	{
+		auto argTuple = std::forward_as_tuple( std::forward< EventArgs >( args )... );
+		( raw->*method )(
+			std::forward< std::tuple_element_t< IndexSequence, std::tuple< EventArgs... > > >(
+				std::get< IndexSequence >( argTuple ) )... );
+	};
+}
+
+template< typename... EventArgs, typename Receiver, typename... HandlerArgs >
+auto makePartialHandler( Receiver* raw, void ( Receiver::*method )( HandlerArgs... ) )
+{
+	static_assert( sizeof...( HandlerArgs ) <= sizeof...( EventArgs ),
+		"Handler has more arguments than the event provides" );
+
+	return makePartialHandlerImpl(
+		raw,
+		method,
+		std::make_index_sequence< sizeof...( HandlerArgs ) >{},
+		static_cast< std::tuple< EventArgs... >* >( nullptr ) );
+}
+
+} // namespace detail
 
 } // namespace pulsar
 } // namespace kmac

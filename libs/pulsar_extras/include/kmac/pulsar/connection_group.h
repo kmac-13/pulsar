@@ -1,3 +1,4 @@
+#pragma once
 #ifndef KMAC_PULSAR_CONNECTION_GROUP_H
 #define KMAC_PULSAR_CONNECTION_GROUP_H
 
@@ -11,27 +12,28 @@
  * disconnected all at once without destroying the owning object:
  *
  * @code
- * class Widget : public pulsar::Object
+ * class Widget : public Trackable
  * {
  * private:
- *     pulsar::ConnectionGroup _connections;
+ *     ConnectionGroup _connections;
  *
  * public:
- *     void setModel(std::shared_ptr<Model> model)
+ *     void setModel( Model* model )
  *     {
  *         _connections.disconnectAll();  // disconnect from old model
  *
- *         _connections += model->dataChanged.connect(shared_from_this(), &Widget::onDataChanged);
- *         _connections += model->titleChanged.connect(shared_from_this(), &Widget::onTitleChanged);
+ *         _connections += model->dataChanged.connect< &Widget::onDataChanged >( this );
+ *         _connections += model->titleChanged.connect< &Widget::onTitleChanged >( this );
  *     }
  * };
  * @endcode
  *
- * @note Connections are also disconnected automatically when the owning
- * Object is destroyed, so ConnectionGroup is not needed purely for cleanup
- * on destruction.
- *
  * ConnectionGroup is move-only (non-copyable).
+ *
+ * @note blockAll() / unblockAll() are declared but not yet implemented.
+ *   Per-connection blocking will be re-integrated in a future update once
+ *   the HandlerEntry flags are extended to carry a per-slot blocked bit.
+ *   Event-level blocking is available now via event.block() / event.blockGuard().
  *
  * @see ScopedConnection for managing a single connection with RAII
  */
@@ -47,7 +49,7 @@ namespace pulsar {
 class ConnectionGroup
 {
 private:
-	std::vector< Connection > _connections;
+	std::vector< Connection > _connections;  ///<  all connections, may include inactive ones
 
 public:
 	/**
@@ -75,11 +77,12 @@ public:
 	~ConnectionGroup();
 
 	// -------------------------------------------------------------------------
-	// Inspection
+	// inspection
 	// -------------------------------------------------------------------------
 
 	/**
-	 * @brief Returns the total number of connections (including disconnected ones not yet cleaned up).
+	 * @brief Returns the total number of connections (including disconnected
+	 * ones not yet cleaned up).
 	 */
 	std::size_t size() const;
 
@@ -99,7 +102,7 @@ public:
 	bool hasActiveConnections() const;
 
 	// -------------------------------------------------------------------------
-	// Adding connections
+	// adding connections
 	// -------------------------------------------------------------------------
 
 	/**
@@ -114,13 +117,13 @@ public:
 	 *
 	 * Enables the idiomatic pattern:
 	 * @code
-	 * _connections += event.connect(receiver, handler);
+	 * _connections += event.connect< &Handler::onData >( this );
 	 * @endcode
 	 */
 	ConnectionGroup& operator+=( Connection conn );
 
 	// -------------------------------------------------------------------------
-	// Bulk operations
+	// bulk operations
 	// -------------------------------------------------------------------------
 
 	/**
@@ -129,12 +132,12 @@ public:
 	void disconnectAll();
 
 	/**
-	 * @brief Block all connections in the group.
+	 * @brief Block every connection in the group.
 	 */
 	void blockAll();
 
 	/**
-	 * @brief Unblock all connections in the group.
+	 * @brief Unblock every connection in the group.
 	 */
 	void unblockAll();
 
@@ -148,35 +151,31 @@ public:
 	void cleanup();
 
 	// -------------------------------------------------------------------------
-	// Ownership transfer
+	// ownership transfer
 	// -------------------------------------------------------------------------
 
 	/**
 	 * @brief Release all Connections without disconnecting them.
 	 *
-	 * After this call, the group is empty and the Connections continue to
-	 * live as long as the event and receiver are alive (auto-disconnect).
-	 * Useful when you want to hand off lifetime management to the objects
-	 * themselves.
+	 * After this call the group is empty and the Connections continue to
+	 * live as long as the event and receiver are alive (auto-disconnect on
+	 * Trackable destruction).  Useful when you want to hand off lifetime
+	 * management to the objects themselves.
 	 */
 	void release();
 
 	// -------------------------------------------------------------------------
-	// Element access
+	// element access
 	// -------------------------------------------------------------------------
 
-	/**
-	 * @brief Access a connection by index (no bounds checking).
-	 */
+	/** @brief Access a connection by index (no bounds checking). */
 	Connection& operator[]( std::size_t index );
 
-	/**
-	 * @brief Access a connection by index (no bounds checking).
-	 */
+	/** @brief Access a connection by index (no bounds checking). */
 	const Connection& operator[]( std::size_t index ) const;
 
 	// -------------------------------------------------------------------------
-	// Range iteration
+	// range iteration
 	// -------------------------------------------------------------------------
 
 	auto begin();
@@ -190,12 +189,12 @@ public:
 // IMPLEMENTATION
 //
 
-ConnectionGroup::ConnectionGroup( ConnectionGroup&& other ) noexcept
+inline ConnectionGroup::ConnectionGroup( ConnectionGroup&& other ) noexcept
 	: _connections( std::move( other._connections ) )
 {
 }
 
-ConnectionGroup& ConnectionGroup::operator=( ConnectionGroup&& other ) noexcept
+inline ConnectionGroup& ConnectionGroup::operator=( ConnectionGroup&& other ) noexcept
 {
 	if ( this != &other )
 	{
@@ -205,17 +204,17 @@ ConnectionGroup& ConnectionGroup::operator=( ConnectionGroup&& other ) noexcept
 	return *this;
 }
 
-ConnectionGroup::~ConnectionGroup()
+inline ConnectionGroup::~ConnectionGroup()
 {
 	disconnectAll();
 }
 
-std::size_t ConnectionGroup::size() const
+inline std::size_t ConnectionGroup::size() const
 {
 	return _connections.size();
 }
 
-std::size_t ConnectionGroup::activeCount() const
+inline std::size_t ConnectionGroup::activeCount() const
 {
 	std::size_t count = 0;
 	for ( const auto& conn : _connections )
@@ -228,12 +227,12 @@ std::size_t ConnectionGroup::activeCount() const
 	return count;
 }
 
-bool ConnectionGroup::empty() const
+inline bool ConnectionGroup::empty() const
 {
 	return _connections.empty();
 }
 
-bool ConnectionGroup::hasActiveConnections() const
+inline bool ConnectionGroup::hasActiveConnections() const
 {
 	for ( const auto& conn : _connections )
 	{
@@ -245,18 +244,18 @@ bool ConnectionGroup::hasActiveConnections() const
 	return false;
 }
 
-void ConnectionGroup::add( Connection conn )
+inline void ConnectionGroup::add( Connection conn )
 {
 	_connections.push_back( std::move( conn ) );
 }
 
-ConnectionGroup& ConnectionGroup::operator+=( Connection conn )
+inline ConnectionGroup& ConnectionGroup::operator+=( Connection conn )
 {
 	add( std::move( conn ) );
 	return *this;
 }
 
-void ConnectionGroup::disconnectAll()
+inline void ConnectionGroup::disconnectAll()
 {
 	for ( auto& conn : _connections )
 	{
@@ -268,7 +267,7 @@ void ConnectionGroup::disconnectAll()
 	_connections.clear();
 }
 
-void ConnectionGroup::blockAll()
+inline void ConnectionGroup::blockAll()
 {
 	for ( auto& conn : _connections )
 	{
@@ -276,7 +275,7 @@ void ConnectionGroup::blockAll()
 	}
 }
 
-void ConnectionGroup::unblockAll()
+inline void ConnectionGroup::unblockAll()
 {
 	for ( auto& conn : _connections )
 	{
@@ -284,7 +283,7 @@ void ConnectionGroup::unblockAll()
 	}
 }
 
-void ConnectionGroup::cleanup()
+inline void ConnectionGroup::cleanup()
 {
 	_connections.erase(
 		std::remove_if( _connections.begin(), _connections.end(),
@@ -294,37 +293,37 @@ void ConnectionGroup::cleanup()
 		_connections.end() );
 }
 
-void ConnectionGroup::release()
+inline void ConnectionGroup::release()
 {
 	_connections.clear();
 }
 
-Connection& ConnectionGroup::operator[]( std::size_t index )
+inline Connection& ConnectionGroup::operator[]( std::size_t index )
 {
 	return _connections[ index ];
 }
 
-const Connection& ConnectionGroup::operator[]( std::size_t index ) const
+inline const Connection& ConnectionGroup::operator[]( std::size_t index ) const
 {
 	return _connections[ index ];
 }
 
-auto ConnectionGroup::begin()
+inline auto ConnectionGroup::begin()
 {
 	return _connections.begin();
 }
 
-auto ConnectionGroup::begin() const
+inline auto ConnectionGroup::begin() const
 {
 	return _connections.begin();
 }
 
-auto ConnectionGroup::end()
+inline auto ConnectionGroup::end()
 {
 	return _connections.end();
 }
 
-auto ConnectionGroup::end() const
+inline auto ConnectionGroup::end() const
 {
 	return _connections.end();
 }

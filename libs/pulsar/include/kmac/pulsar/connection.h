@@ -1,326 +1,281 @@
+#pragma once
 #ifndef KMAC_PULSAR_CONNECTION_H
 #define KMAC_PULSAR_CONNECTION_H
 
 /**
  * @file connection.h
- * @brief Connection handle and abstract base.
+ * @brief User-facing connection handle returned by Event::connect().
  *
- * This file defines the following related types:
+ * @section connection Connection
  *
- * - **ConnectionBase**:
- *   Internal abstract interface implemented by each typed ConnectionImpl inside Event.
+ * Holds a WeakPtr<EventImplBase> + handler index + generation counter (24 bytes).
+ * The WeakPtr expires when the owning BasicEvent is destroyed; index + generation
+ * identify the specific handler entry and detect stale handles after disconnect
+ * or index reuse.
  *
- * - **Connection**:
- *   A lightweight, copyable handle returned by Event::connect().  Individual methods
- *   are thread-safe, but the handle object itself must not be shared across threads
- *   without external synchronization.
+ * All copies of a Connection refer to the same handler; calling disconnect() on
+ * any copy disconnects them all.  Safe to call on a null or expired Connection.
+ *
+ * @section scoped ScopedConnection
+ *
+ * RAII wrapper that calls disconnect() on destruction.  Move-only.
  */
 
-#include "pulsar_fwd.h"
-#include "config.h"
+#include "callable.h"
+#include "event_impl_base.h"
+#include "platform.h"
 
-#include <atomic>
-#include <memory>
+#include <cstdint>
 
 namespace kmac {
 namespace pulsar {
 
-// ============================================================================
-// ConnectionBase
-// ============================================================================
-
-/**
- * @brief Abstract base class for all typed connection implementations.
- *
- * Each ConnectionImpl<HandlerFunc> inside Event derives from this class.
- * User code never interacts with ConnectionBase directly; use Connection
- * (or ScopedConnection / ConnectionGroup) instead.
- */
-class ConnectionBase
-{
-	// only Object (via setEventLoop/disconnectAndSetEventLoop) may call the
-	// migration protocol methods, user code goes through Connection handles.
-	friend class Object;
-
-protected:
-	std::atomic< bool > _connected { true };  ///< true while the connection is active
-	std::atomic< bool > _blocked { false };   ///< true while the connection is temporarily blocked
-
-public:
-	virtual ~ConnectionBase() = default;
-
-	/**
-	 * @brief Returns true if the connection has not been disconnected.
-	 */
-	virtual bool isConnected() const = 0;
-
-	/**
-	 * @brief Permanently disconnect.  Safe to call multiple times.
-	 */
-	virtual void disconnect() = 0;
-
-	/**
-	 * @brief Returns true if the connection is currently blocked.
-	 */
-	virtual bool isBlocked() const = 0;
-
-	/**
-	 * @brief Suppress invocations without disconnecting.
-	 */
-	virtual void block() = 0;
-
-	/**
-	 * @brief Resume suppressed invocations.
-	 */
-	virtual void unblock() = 0;
-
-private:
-	/**
-	 * @brief Called by Object::setEventLoop() before the object's loop pointer changes.
-	 *
-	 * Suspends deferred invocations until updateEventLoop() installs the new loop.
-	 */
-	virtual void beginMigration() = 0;
-
-	/**
-	 * @brief Called by Object::setEventLoop() after the new loop is set.
-	 *
-	 * @param newLoop the new EventLoop (may be nullptr to detach)
-	 */
-	virtual void updateEventLoop( EventLoop* newLoop ) = 0;
-};
-
-// ============================================================================
-// Connection
-// ============================================================================
-
-/**
- * @brief Handle to an event connection.
- *
- * Connection provides explicit control over event connections, allowing manual
- * disconnection, blocking, and lifetime management.  However, explicit connection
- * management is often unnecessary - Pulsar automatically disconnects when objects
- * are destroyed.
- *
- * @section thread_safety Thread Safety
- *
- * **Methods are individually thread-safe:**
- * - disconnect(), block(), unblock(), isConnected() can be called from any thread
- *
- * **The Connection object itself is NOT thread-safe:**
- * - do NOT access the same Connection object from multiple threads simultaneously
- * - do NOT store Connection objects in shared containers without synchronization
- * - do NOT pass Connection objects by reference across thread boundaries
- *
- * @section lifetime Lifetime Management
- *
- * Connections automatically disconnect when:
- * - the sender (event owner) is destroyed
- * - the receiver (handler owner) is destroyed
- * - disconnect() is explicitly called
- *
- * You only need Connection handles when you want to:
- * - manually disconnect before object destruction
- * - temporarily block/unblock a connection
- * - check connection status
- *
- * @section usage Recommended Usage Patterns
- *
- * **Best: Let auto-disconnect work**
- * @code
- * event.connect(receiver, &Receiver::handler);
- * // no need to store Connection - auto-disconnects when receiver destroyed
- * @endcode
- *
- * **Good: Use ScopedConnection for RAII**
- * @code
- * auto scoped = event.connect(receiver, handler).scoped();
- * // auto-disconnects when scoped instance goes out of scope
- * @endcode
- *
- * **Good: Disconnect by receiver**
- * @code
- * event.disconnect(receiver);  // thread-safe, no handle needed
- * @endcode
- *
- * **Acceptable: Store in single-threaded context**
- * @code
- * Connection conn = event.connect(receiver, handler);
- * // ... later in same thread ...
- * conn.disconnect();
- * @endcode
- *
- * @section anti_patterns Anti-Patterns to Avoid
- *
- * **Wrong: Concurrent access to same Connection object**
- * @code
- * // thread A
- * connections[i].disconnect();
- *
- * // thread B (concurrent - RACE CONDITION on the Connection object!)
- * connections[i] = event.connect(...);
- * @endcode
- *
- * **Wrong: Passing by reference across threads**
- * @code
- * void worker(Connection& conn) {   // BAD - caller may also use conn
- *     conn.disconnect();
- * }
- * @endcode
- *
- * **Inefficient: Rapid connect/disconnect churn**
- * @code
- * while (running) {
- *     auto conn = event.connect(...);   // allocates each iteration
- *     ...
- *     conn.disconnect();
- * }
- * // better: use event.disconnect(receiver) to avoid handle churn
- * @endcode
- *
- * @section multi_threaded Multi-Threaded Scenarios
- *
- * If you must store connections in containers shared between threads,
- * use ConnectionGuard instead:
- * @code
- * ConnectionGuard guard(event.connect(receiver, handler));
- * // thread-safe from any thread:
- * guard.disconnect();
- * @endcode
- *
- * @see ScopedConnection for automatic RAII disconnection
- * @see ConnectionGuard for thread-safe storage in shared containers
- * @see Event::disconnect(receiver) for thread-safe disconnection by receiver
- */
 class Connection
 {
 private:
-	std::shared_ptr< ConnectionBase > _impl;
+	platform::WeakPtr< EventImplBase > _impl;  ///< the owning event's impl; expired() once that event is destroyed
+	uint32_t _index = 0;       ///< stable handle index into the event's handler array
+	uint16_t _generation = 0;  ///< generation stamped on the handle when this Connection was made
 
 public:
 	/**
-	 * @brief Default constructor, creates an empty, disconnected handle.
+	 * @brief Constructs a null Connection: isConnected() is false and
+	 * disconnect()/block()/unblock() are all no-ops.
 	 */
 	Connection() = default;
 
 	/**
-	 * @brief Construct from a ConnectionBase implementation.
-	 *
-	 * @param impl Shared ownership of the underlying connection.
+	 * @brief Constructs a live handle to the handler at `index` (with the
+	 * given `generation`) in the event behind `impl`.  Called by
+	 * EventStorage::connectImpl() when a handler slot is filled; not meant
+	 * to be constructed directly by users.
 	 */
-	Connection( std::shared_ptr< ConnectionBase > impl );
+	explicit Connection(
+		platform::WeakPtr< EventImplBase > impl,
+		uint32_t index,
+		uint32_t generation );
 
 	/**
-	 * @brief Returns true if the connection is still active.
-	 *
-	 * Each call is atomic with respect to the internal connection state, but
-	 * the Connection object must not be accessed concurrently from multiple
-	 * threads.  Use ConnectionGuard for shared-ownership scenarios.
+	 * @brief True if the underlying event still exists and this handle's
+	 * generation still matches the slot's current generation - i.e. the
+	 * connection has not been disconnected and its slot has not been reused
+	 * by a later connection.  False for a null, disconnected, or stale
+	 * Connection.
 	 */
 	bool isConnected() const;
 
 	/**
-	 * @brief Disconnect this connection.
-	 *
-	 * Safe to call from any thread, but the Connection object itself must not
-	 * be accessed concurrently from multiple threads.  Use ConnectionGuard
-	 * for shared-ownership scenarios.
-	 *
-	 * Has no effect if already disconnected.
+	 * @brief Removes this connection from its event, if it is still
+	 * connected.  All copies of this Connection observe the disconnect (see
+	 * file docs above).  Safe to call on a null, already-disconnected, or
+	 * stale Connection - a no-op in every one of those cases.
 	 */
 	void disconnect();
 
 	/**
-	 * @brief Returns true if the connection is currently blocked.
-	 *
-	 * Each call is atomic with respect to the internal connection state, but
-	 * the Connection object must not be accessed concurrently from multiple
-	 * threads.  Use ConnectionGuard for shared-ownership scenarios.
+	 * @brief Returns true if this specific connection is currently blocked.
+	 * Always false for a disconnected or stale (generation mismatch)
+	 * Connection.
 	 */
 	bool isBlocked() const;
 
 	/**
-	 * @brief Temporarily suppress handler invocations without disconnecting.
-	 *
-	 * Blocked connections remain in the event's connection list but their
-	 * handlers are not called.  Each call is atomic with respect to the
-	 * internal connection state, but the Connection object must not be
-	 * accessed concurrently from multiple threads.  Use ConnectionGuard
-	 * for shared-ownership scenarios.
-	 *
-	 * @see unblock()
+	 * @brief Suppress dispatch through this connection only, leaving every
+	 * other connection on the same event unaffected.  Matches
+	 * EventImpl::block()'s timing model: only trigger()s that occur while
+	 * blocked are suppressed - a Deferred invocation already posted to an
+	 * EventLoop before blocking still runs.  No-op if disconnected.
 	 */
 	void block();
 
 	/**
-	 * @brief Resume handler invocations after block().
-	 *
-	 * Each call is atomic with respect to the internal connection state, but
-	 * the Connection object must not be accessed concurrently from multiple
-	 * threads.  Use ConnectionGuard for shared-ownership scenarios.
-	 *
-	 * @see block()
+	 * @brief Resume dispatch through this connection.  No-op if
+	 * disconnected or not currently blocked.
 	 */
 	void unblock();
-
-	/**
-	 * @brief Convert to a ScopedConnection for RAII lifetime management.
-	 *
-	 * This is an rvalue-ref qualified method: the Connection is moved into
-	 * the returned ScopedConnection and is no longer valid after the call.
-	 *
-	 * @code
-	 * auto scoped = event.connect(receiver, handler).scoped();
-	 * // Automatically disconnects when scoped goes out of scope.
-	 * @endcode
-	 *
-	 * @return ScopedConnection that owns and disconnects on destruction.
-	 *
-	 * @note the definition is found with ScopedConnection
-	 */
-	ScopedConnection scoped() &&;
 };
 
-//
-// CONNECTION
-//
+// ---------------------------------------------------------------------------
 
-Connection::Connection( std::shared_ptr< ConnectionBase > impl )
-	: _impl( impl )
+inline Connection::Connection(
+	platform::WeakPtr< EventImplBase > impl,
+	uint32_t index,
+	uint32_t generation )
+	: _impl( std::move( impl ) )
+	, _index( index )
+	, _generation( generation )
 {
 }
 
-bool Connection::isConnected() const
+inline bool Connection::isConnected() const
 {
-	return _impl && _impl->isConnected();
+	auto impl = _impl.lock();
+	return impl && impl->isHandlerConnected( _index, _generation );
 }
 
-void Connection::disconnect()
+inline void Connection::disconnect()
 {
-	if ( _impl )
+	if ( auto impl = _impl.lock() )
 	{
-		_impl->disconnect();
+		impl->disconnectHandler( _index, _generation );
 	}
 }
 
-bool Connection::isBlocked() const
+inline bool Connection::isBlocked() const
 {
-	return _impl && _impl->isBlocked();
+	auto impl = _impl.lock();
+	return impl && impl->isHandlerBlocked( _index, _generation );
 }
 
-void Connection::block()
+inline void Connection::block()
 {
-	if ( _impl )
+	if ( auto impl = _impl.lock() )
 	{
-		_impl->block();
+		impl->blockHandler( _index, _generation );
 	}
 }
 
-void Connection::unblock()
+inline void Connection::unblock()
 {
-	if ( _impl )
+	if ( auto impl = _impl.lock() )
 	{
-		_impl->unblock();
+		impl->unblockHandler( _index, _generation );
+	}
+}
+
+// ===========================================================================
+
+class ScopedConnection
+{
+private:
+	Connection _connection;
+
+public:
+	/**
+	 * @brief Constructs an empty guard - owns no connection, disconnect() on
+	 * destruction is a no-op.
+	 */
+	ScopedConnection() = default;
+
+	/**
+	 * @brief Takes ownership of `connection`; disconnects it on destruction
+	 * unless release() is called first.
+	 */
+	explicit ScopedConnection( Connection connection );
+
+	/**
+	 * @brief Disconnects the owned connection, if any (see
+	 * Connection::disconnect() - safe even if already disconnected).
+	 */
+	~ScopedConnection();
+
+	ScopedConnection( const ScopedConnection& ) = delete;
+	ScopedConnection& operator=( const ScopedConnection& ) = delete;
+	ScopedConnection( ScopedConnection&& ) = default;
+	ScopedConnection& operator=( ScopedConnection&& ) = default;
+
+	/**
+	 * @brief Forwards to the owned Connection::isConnected().
+	 */
+	bool isConnected() const;
+
+	/**
+	 * @brief Releases ownership without disconnecting - the connection stays alive.
+	 */
+	void release();
+};
+
+// ---------------------------------------------------------------------------
+
+inline ScopedConnection::ScopedConnection( Connection connection )
+	: _connection( std::move( connection ) )
+{
+}
+
+inline ScopedConnection::~ScopedConnection()
+{
+	_connection.disconnect();
+}
+
+inline bool ScopedConnection::isConnected() const
+{
+	return _connection.isConnected();
+}
+
+inline void ScopedConnection::release()
+{
+	_connection = Connection{};
+}
+
+/**
+ * @brief RAII guard that blocks an event for its lifetime.
+ *
+ * Returned by BasicEvent::blockGuard().  While any BlockGuard for an event
+ * exists, calls to operator()() / trigger() / emit() are silently
+ * dropped before any dispatch or task-posting takes place.
+ *
+ * Guards nest correctly: if two guards are held simultaneously the event
+ * stays blocked until both are destroyed, or until unblock is manually called
+ * twice.
+ *
+ * Deliberately not templated on MutexType/Args, so one BlockGuard type
+ * works for Event, SharedEvent, and SingleThreadedEvent alike - the
+ * concrete EventImpl::block() call happens in blockGuard() itself (which
+ * still knows the concrete type), before this guard is even constructed;
+ * this guard only needs to keep the event alive (_keepAlive) and remember
+ * how to unblock it later (_unblock), neither of which requires knowing
+ * the concrete type.
+ *
+ * @code
+ * auto guard = ev.blockGuard();  // ev is now blocked
+ * ev( 42 );                      // dropped
+ * // guard destroyed - ev unblocked
+ * @endcode
+ */
+class BlockGuard
+{
+	template< typename MutexType, typename... Args >
+	friend class BasicEvent;
+
+	template< typename MutexType, typename... Args >
+	friend class EventStorage;
+
+private:
+	platform::SharedPtr< EventImplBase > _keepAlive;  ///< kept alive for the guard's lifetime; never dereferenced - see _unblock below
+	Callable< void() > _unblock;  ///< bound (cheaply, no heap allocation) to the concrete EventImpl::unblock() at construction time, when the concrete type is still known
+
+	/**
+	 * @brief Only constructible by BasicEvent::block()/EventStorage::blockGuard(),
+	 * which have already called the concrete EventImpl::block() themselves
+	 * before constructing this guard - see the class docs above for why.
+	 */
+	BlockGuard( platform::SharedPtr< EventImplBase > keepAlive, Callable< void() > unblock );
+
+public:
+	/**
+	 * @brief Unblocks the event, unless this guard was moved-from (in which
+	 * case _unblock is empty and there is nothing to do).
+	 */
+	~BlockGuard();
+
+	BlockGuard( BlockGuard&& ) = default;
+	BlockGuard& operator=( BlockGuard&& ) = default;
+
+	BlockGuard( const BlockGuard& ) = delete;
+	BlockGuard& operator=( const BlockGuard& ) = delete;
+};
+
+inline BlockGuard::BlockGuard( platform::SharedPtr< EventImplBase > keepAlive, Callable< void() > unblock )
+	: _keepAlive( std::move( keepAlive ) )
+	, _unblock( std::move( unblock ) )
+{
+}
+
+inline BlockGuard::~BlockGuard()
+{
+	if ( _unblock )
+	{
+		_unblock();
 	}
 }
 

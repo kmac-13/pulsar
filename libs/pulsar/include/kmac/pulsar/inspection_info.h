@@ -10,11 +10,12 @@
  * - ConnectionInfo  : snapshot of a single connection's state
  * - EventInfo       : aggregate statistics for an entire event
  *
- * These types are populated by EventInspector and by ConnectionWrapper::getInfo().
- * User code typically reads them but does not construct them directly.
+ * These types are populated by EventInspector.  User code typically reads
+ * them but does not construct them directly.
  */
 
 #include "pulsar_fwd.h"
+#include "connection_type.h"
 
 #include <cstdlib>
 #include <string>
@@ -32,8 +33,8 @@ namespace pulsar {
  *
  * On GCC/Clang this calls abi::__cxa_demangle.  On MSVC, typeid().name()
  * already returns a readable name so the raw string is returned as-is.
- * When RTTI is disabled (@c -fno-rtti / @c /GR-) the @p name pointer
- * is null and @c "[RTTI disabled]" is returned.
+ * When RTTI is disabled (-fno-rtti / /GR-) the name pointer
+ * is null and "[RTTI disabled]" is returned.
  *
  * @param name raw name from typeid(x).name(), or nullptr if RTTI is off
  * @return human-readable type name, or the raw name if demangling fails
@@ -58,11 +59,11 @@ inline std::string demangle( const char* name )
 }
 
 /**
- * @brief Yield the ABI type name of @p x, or @c nullptr when RTTI is disabled.
+ * @brief Yield the ABI type name of x, or nullptr when RTTI is disabled.
  *
- * Use this instead of @c typeid(x).name() directly so that code guarded by
- * @c __cpp_rtti compiles cleanly under @c -fno-rtti / @c /GR-.
- * demangle() accepts @c nullptr and returns @c "[RTTI disabled]".
+ * Use this instead of typeid(x).name() directly so that code guarded by
+ * __cpp_rtti compiles cleanly under -fno-rtti / /GR-.
+ * demangle() accepts nullptr and returns "[RTTI disabled]".
  */
 #ifdef __cpp_rtti
 #	define PULSAR_TYPE_NAME( x ) typeid( x ).name()
@@ -73,24 +74,23 @@ inline std::string demangle( const char* name )
 /**
  * @brief Snapshot of a single connection's runtime state.
  *
- * Returned by EventInspector::getConnectionInfo() and by
- * ConnectionWrapper::getInfo().  All fields are set at the time of the call;
- * the snapshot is not kept in sync with subsequent changes.
+ * Returned by EventInspector::getConnectionInfo().  All fields are set at
+ * the time of the call; the snapshot is not kept in sync with subsequent
+ * changes.
  */
 struct ConnectionInfo
 {
-	void* senderAddress;       ///< address of the sender Object (nullptr if unknown)
-	void* receiverAddress;     ///< address of the receiver Object (nullptr for free functions)
-	void* connectionAddress;   ///< address of the underlying ConnectionImpl
+	void* senderAddress;           ///< address of the sender's owning Trackable (nullptr if unknown)
+	void* receiverAddress;         ///< address of the receiver object (nullptr for free functions)
 	std::string senderTypeName;    ///< demangled type name of the sender
 	std::string receiverTypeName;  ///< demangled type name of the receiver
-	ConnectionType type;       ///< stored connection type (Direct, Deferred, or Auto)
+	ConnectionType type;           ///< stored connection type (Direct, Deferred, or Auto)
 	EventLoop* senderEventLoop;    ///< sender's current event loop at snapshot time (nullptr if none)
 	EventLoop* receiverEventLoop;  ///< receiver's current event loop at snapshot time (nullptr if none)
-	int priority;              ///< execution priority - higher values execute first
-	bool isConnected;          ///< false if the connection has been disconnected
-	bool isBlocked;            ///< true if the connection is temporarily blocked
-	bool isSingleShot;         ///< true if the connection auto-disconnects after first invocation
+	int priority;                  ///< execution priority - higher values execute first
+	bool isConnected;              ///< false if the connection has been disconnected
+	bool isBlocked;                ///< true if the connection is temporarily blocked
+	bool isSingleShot;             ///< true if the connection auto-disconnects after first invocation
 };
 
 /**
@@ -102,7 +102,7 @@ struct ConnectionInfo
 struct EventInfo
 {
 	void* eventAddress;              ///< address of the Event object
-	void* senderAddress;             ///< address of the sender Object (nullptr if none)
+	void* senderAddress;             ///< address of the sender's owning Trackable (nullptr if none)
 	std::string senderTypeName;      ///< demangled type name of the sender
 	std::string eventTypeName;       ///< demangled type name of the Event instantiation
 	size_t connectionCount;          ///< total entries in the connection list (including dead ones not yet pruned)

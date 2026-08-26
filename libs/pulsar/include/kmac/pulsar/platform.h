@@ -14,50 +14,51 @@
  * @section configuration Configuration
  *
  * Thread safety is **enabled by default**.  To disable it, define
- * @c PULSAR_THREAD_SAFE=0 before including any Pulsar header (typically via
+ * `PULSAR_THREAD_SAFE=0` before including any Pulsar header (typically via
  * a compiler flag or CMakeLists.txt):
  *
- * @code
- * // CMakeLists.txt
+ * ```cmake
+ * # CMakeLists.txt
  * target_compile_definitions( app PRIVATE PULSAR_THREAD_SAFE=0 )
- * @endcode
+ * ```
  *
  * When disabled:
- * - all @c platform::Mutex and @c platform::SharedMutex instances are
+ * - all `platform::Mutex` and `platform::SharedMutex` instances are
  *   zero-size structs with no-op lock/unlock methods
- * - @c <mutex>, @c <shared_mutex>, and @c <atomic> are not included,
+ * - `<mutex>`, `<shared_mutex>`, and `<atomic>` are not included,
  *   allowing compilation on bare-metal targets where those headers are
  *   unavailable
- * - @c std::lock_guard, @c std::unique_lock, and @c std::shared_lock all
+ * - `std::lock_guard`, `std::unique_lock`, and `std::shared_lock` all
  *   compile correctly against the no-op types since the stubs satisfy the
- *   @c Lockable and @c SharedMutex named requirements
- * - @c platform::Atomic<T> uses @c volatile instead of atomic instructions;
+ *   `Lockable` and `SharedMutex` named requirements
+ * - `platform::Atomic<T>` uses `volatile` instead of atomic instructions;
  *   safe for single-core bare-metal targets, not for multi-core (see below)
  *
  * @section types Types
  *
  * - **platform::Mutex** - used where a plain exclusive mutex suffices:
- *   Object::_connectionsMutex, EventLoop::_queueMutex,
- *   CombiningEvent::_mutex, ConnectionGuard::_mutex
+ *   Trackable::_mutex and EventLoop::_pendingMutex (both in pulsar core);
+ *   CombiningEvent::mutex and ConnectionGuard::_mutex (both in pulsar_extras)
  *
  * - **platform::SharedMutex** - used where concurrent reads are beneficial:
- *   Event::_mutex (emissions take a shared lock; connect/disconnect take an
- *   exclusive lock)
+ *   EventImpl::mutex when MutexType is SharedMutex (i.e. SharedEvent) -
+ *   triggers take a shared lock; connect/disconnect take an exclusive lock
  *
  * - **platform::Atomic<T>** - used for flags and state variables that may
- *   be read or written from multiple threads: Event::_destroying,
- *   ConnectionImpl::_connected, ConnectionImpl::_blocked, etc.
+ *   be read or written from multiple threads: EventImplBase::_blockDepth,
+ *   EventImplBase::_nextId and Connection::_nextTag (both static, process-
+ *   wide counters), EventLoop's drain-state members, Trackable::_eventLoop
  *
  * @section atomic_safety Atomic Safety on Bare-Metal Targets
  *
- * When @c PULSAR_THREAD_SAFE=0, @c platform::Atomic<T> uses @c volatile T
- * rather than @c std::atomic<T>.  This is sufficient for single-core
+ * When `PULSAR_THREAD_SAFE=0`, `platform::Atomic<T>` uses `volatile` T
+ * rather than `std::atomic<T>`.  This is sufficient for single-core
  * bare-metal targets where the only concurrency concern is compiler
  * reordering (e.g. an ISR reading a variable the main loop writes).
  * It is @b not safe on multi-core targets.
  *
- * For multi-core bare-metal or RTOS targets that cannot use @c std::atomic,
- * provide a custom @c platform::Atomic<T> specialisation before including
+ * For multi-core bare-metal or RTOS targets that cannot use `std::atomic`,
+ * provide a custom `platform::Atomic<T>` specialisation before including
  * any Pulsar header.  See the custom implementation section at the bottom
  * of this file for examples.
  */
@@ -70,7 +71,12 @@
 #	include <atomic>
 #	include <mutex>
 #	include <shared_mutex>
+#	include <thread>        // for std::thread::id / std::this_thread::get_id (ThreadId)
+#	include <type_traits>
 #endif
+
+#include <memory>  // for std::shared_ptr / std::weak_ptr (SharedPtr/WeakPtr aliases)
+#include <mutex>   // for std::lock / std::defer_lock (used by both modes' UniqueLock)
 
 namespace kmac {
 namespace pulsar {
@@ -83,48 +89,207 @@ namespace platform {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief Exclusive mutex - satisfies the @c Lockable named requirement.
+ * @brief Exclusive mutex - satisfies the `Lockable` named requirement.
  *
- * Maps to @c std::mutex when @c PULSAR_THREAD_SAFE is set (the default).
+ * Maps to `std::mutex` when `PULSAR_THREAD_SAFE` is set (the default).
  */
 using Mutex = std::mutex;
 
 /**
- * @brief Shared/exclusive mutex - satisfies the @c SharedMutex named requirement.
+ * @brief Recursive exclusive mutex - satisfies the `Lockable` named
+ * requirement, allows the same thread to re-acquire the lock.
  *
- * Maps to @c std::shared_mutex when @c PULSAR_THREAD_SAFE is set (the default).
+ * Maps to `std::recursive_mutex` when `PULSAR_THREAD_SAFE` is set.
+ *
+ * Used by Event::_mutex: triggerImpl() may hold this lock through handler
+ * invocation for Direct connections, and a handler may legitimately
+ * re-enter connect()/disconnect()/trigger() on the SAME Event during that
+ * invocation (see test_reentrancy.cpp). Benchmarked (round 15) to have
+ * equal-or-better contended-case performance vs std::mutex on at least one
+ * platform (MinGW/Windows) even WITHOUT recursion, with no measured
+ * downside - safe as Event::_mutex's type unconditionally.
+ *
+ * NOT used for EventLoop::_queueMutex, which must remain a plain
+ * std::mutex for std::condition_variable compatibility (postEvent() does
+ * not re-enter Event's methods, so recursion is not needed there).
+ */
+using RecursiveMutex = std::recursive_mutex;
+
+/**
+ * @brief Experimental recursive mutex with a cheaper uncontended/
+ * non-reentrant fast path than std::recursive_mutex.
+ *
+ * Rationale: std::recursive_mutex's per-platform implementation typically
+ * does extra bookkeeping (e.g. a thread-ID comparison plus internal
+ * recursion-count tracking) on EVERY lock() call, even when the calling
+ * thread never actually re-enters - the overwhelmingly common case for
+ * Event::_mutex (most emissions are not reentrant).  Measured on Linux/
+ * glibc, std::recursive_mutex costs ~2 ns more than std::mutex per
+ * uncontended lock(); the gap is suspected larger on Windows/MinGW,
+ * consistent with Pulsar's measured ~7-8 ns ST-vs-TS emission gap.
+ *
+ * Design: wraps a plain std::mutex (cheaper uncontended lock than
+ * recursive_mutex per the above) plus a manually-tracked owner thread ID
+ * and depth counter.  lock() checks "is the calling thread already the
+ * owner?" via a relaxed atomic load BEFORE attempting the underlying
+ * mutex - if so, this is a reentrant call, depth is incremented, and the
+ * underlying mutex is untouched (already held by this thread from the
+ * outer lock() call).  If not, lock() blocks on the underlying mutex as
+ * normal, then records ownership.
+ *
+ * Same Lockable-only contract as RecursiveMutex (lock/unlock/try_lock) -
+ * no condition_variable compatibility needed, matching Event::_mutex's
+ * actual usage (LockGuard/UniqueLock only, no wait()).
+ *
+ * THREAD SAFETY NOTE: _owner is read via relaxed load by every lock()
+ * call (including from threads that do NOT hold the lock) - this is safe
+ * because:
+ *  - a thread only ever WRITES _owner to its own ID (after acquiring
+ *    _inner) or to the "no owner" sentinel (right before releasing
+ *    _inner), so a reader can only ever observe either some OTHER
+ *    thread's ID (in which case it must contend for _inner regardless -
+ *    correct, since it is genuinely not the owner) or its OWN ID
+ *    (which is only possible if this thread itself wrote it, establishing
+ *    the fast path correctly) - there is no value _owner could hold that
+ *    would cause a non-owning thread to incorrectly take the fast path.
+ */
+class FastRecursiveMutex
+{
+	static_assert( std::is_trivially_copyable_v< std::thread::id >,
+		"FastRecursiveMutex requires std::thread::id to be trivially copyable "
+		"for std::atomic<std::thread::id> to be well-formed per the standard; "
+		"true for libstdc++ (Linux, MinGW) and MSVC's STL" );
+
+private:
+	std::mutex _inner;
+	std::atomic< std::thread::id > _owner { std::thread::id{} };
+	int _depth = 0;  ///< only touched while _inner is held by the owning thread
+
+public:
+	void lock()
+	{
+		const std::thread::id self = std::this_thread::get_id();
+
+		if ( _owner.load( std::memory_order_relaxed ) == self )
+		{
+			// reentrant: this thread already holds _inner from an outer
+			// lock() call - no need to touch _inner again
+			++_depth;
+			return;
+		}
+
+		_inner.lock();
+		_owner.store( self, std::memory_order_relaxed );
+		_depth = 1;
+	}
+
+	bool try_lock()
+	{
+		const std::thread::id self = std::this_thread::get_id();
+
+		if ( _owner.load( std::memory_order_relaxed ) == self )
+		{
+			++_depth;
+			return true;
+		}
+
+		if ( _inner.try_lock() )
+		{
+			_owner.store( self, std::memory_order_relaxed );
+			_depth = 1;
+			return true;
+		}
+
+		return false;
+	}
+
+	void unlock()
+	{
+		// _depth and _owner here are only ever touched by the thread that
+		// currently owns the lock (this call only makes sense if the
+		// calling thread holds it - same contract as recursive_mutex::
+		// unlock() called without a matching lock(), which is UB), so no
+		// atomicity is needed for the decrement itself.
+		if ( --_depth == 0 )
+		{
+			// clear ownership BEFORE unlocking _inner: once _inner is
+			// unlocked, another thread may immediately acquire it and
+			// must not observe a stale _owner pointing at this thread
+			_owner.store( std::thread::id{}, std::memory_order_relaxed );
+			_inner.unlock();
+		}
+	}
+};
+
+/**
+ * @brief Shared/exclusive mutex - satisfies the `SharedMutex` named requirement.
+ *
+ * Maps to `std::shared_mutex` when `PULSAR_THREAD_SAFE` is set (the default).
  * Allows concurrent shared locks (e.g. multiple simultaneous emissions) while
  * still providing exclusive locks for writes (connect/disconnect).
  */
 using SharedMutex = std::shared_mutex;
 
 /**
- * @brief Exclusive lock guard - aliases @c std::lock_guard.
+ * @brief Exclusive lock guard - aliases `std::lock_guard`.
  */
 template< typename M >
 using LockGuard = std::lock_guard< M >;
 
 /**
- * @brief Unique (exclusive, movable) lock - aliases @c std::unique_lock.
+ * @brief Unique (exclusive, movable) lock - aliases `std::unique_lock`.
  */
 template< typename M >
 using UniqueLock = std::unique_lock< M >;
 
 /**
- * @brief Shared (read) lock - aliases @c std::shared_lock.
+ * @brief Shared (read) lock - aliases `std::shared_lock`.
  */
 template< typename M >
 using SharedLock = std::shared_lock< M >;
 
 /**
- * @brief Atomic value - aliases @c std::atomic<T>.
+ * @brief Atomic value - aliases `std::atomic<T>`.
  *
  * Provides full memory ordering guarantees for multi-core targets.
- * Use @c load(), @c store(), and @c exchange() with explicit memory
+ * Use `load()`, `store()`, and `exchange()` with explicit memory
  * orders where ordering matters for correctness.
  */
 template< typename T >
 using Atomic = std::atomic< T >;
+
+/**
+ * @brief Shared-ownership smart pointer - aliases `std::shared_ptr<T>`.
+ *
+ * Centralised alias so a future pool allocator or custom deleter can be
+ * substituted in one place without touching every call site.
+ */
+template< typename T >
+using SharedPtr = std::shared_ptr< T >;
+
+/**
+ * @brief Weak reference to a SharedPtr-managed object - aliases `std::weak_ptr<T>`.
+ */
+template< typename T >
+using WeakPtr = std::weak_ptr< T >;
+
+/**
+ * @brief Opaque thread identity value.
+ *
+ * Aliases `std::thread::id` in thread-safe mode.  On embedded targets
+ * replace with a platform-native handle (e.g. `TaskHandle_t` on FreeRTOS).
+ * @see currentThreadId()
+ */
+using ThreadId = std::thread::id;
+
+/**
+ * @brief Returns the identity of the calling thread.
+ * Aliases `std::this_thread::get_id()` in thread-safe mode.
+ */
+inline ThreadId currentThreadId() noexcept
+{
+	return std::this_thread::get_id();
+}
 
 #else // PULSAR_THREAD_SAFE == 0
 
@@ -139,7 +304,7 @@ using Atomic = std::atomic< T >;
 /**
  * @brief No-op exclusive mutex for single-threaded / bare-metal targets.
  *
- * Satisfies the @c Lockable named requirement.
+ * Satisfies the `Lockable` named requirement.
  * All methods are no-ops; the struct has no data members (zero size).
  */
 struct Mutex
@@ -149,10 +314,14 @@ struct Mutex
 	bool try_lock() { return true; }
 };
 
+using RecursiveMutex = Mutex;
+
+using FastRecursiveMutex = Mutex;
+
 /**
  * @brief No-op shared mutex for single-threaded / bare-metal targets.
  *
- * Satisfies the @c SharedMutex named requirement.
+ * Satisfies the `SharedMutex` named requirement.
  * All methods are no-ops; the struct has no data members (zero size).
  */
 struct SharedMutex
@@ -179,11 +348,21 @@ struct LockGuard
 
 /**
  * @brief No-op unique (exclusive, movable) lock.
+ *
+ * Models the standard `Lockable` requirement (lock/try_lock/unlock) and
+ * supports deferred construction, so single-threaded code can use the same
+ * `std::lock( a, b )` / deferred-then-lock patterns as the thread-safe mode.
+ * All operations are no-ops - there is no contention to guard against.
  */
 template< typename M >
 struct UniqueLock
 {
 	explicit UniqueLock( M& ) {}
+	UniqueLock( M&, std::defer_lock_t ) noexcept {}
+
+	void lock() {}
+	void unlock() {}
+	bool try_lock() { return true; }
 };
 
 /**
@@ -199,21 +378,21 @@ struct SharedLock
 /**
  * @brief Non-atomic volatile value for single-threaded / bare-metal targets.
  *
- * Mirrors the @c std::atomic<T> interface so that code using
- * @c platform::Atomic<T> compiles without modification regardless of
- * whether @c PULSAR_THREAD_SAFE is set.  Memory order arguments are
+ * Mirrors the `std::atomic<T>` interface so that code using
+ * `platform::Atomic<T>` compiles without modification regardless of
+ * whether `PULSAR_THREAD_SAFE` is set.  Memory order arguments are
  * accepted and silently ignored via variadic overloads - on a single-core
  * target there is no hardware reordering to guard against.
  *
- * Uses @c volatile T internally to prevent the compiler from caching the
+ * Uses `volatile` T internally to prevent the compiler from caching the
  * value in a register, which is sufficient on single-core bare-metal
  * targets to protect against ISR access.
  *
- * @warning Not safe for multi-core targets.  When @c PULSAR_THREAD_SAFE=1
- *   (the default), @c platform::Atomic<T> maps to @c std::atomic<T> which
+ * Not safe for multi-core targets.  When `PULSAR_THREAD_SAFE=1`
+ *   (the default), `platform::Atomic<T>` maps to `std::atomic<T>` which
  *   provides full multi-core ordering guarantees.  For multi-core
- *   bare-metal targets that cannot use @c std::atomic, define
- *   @c PULSAR_CUSTOM_ATOMIC and provide your own implementation before
+ *   bare-metal targets that cannot use `std::atomic`, define
+ *   `PULSAR_CUSTOM_ATOMIC` and provide your own implementation before
  *   including any Pulsar header - see the custom implementation section
  *   at the bottom of platform.h for examples.
  *
@@ -248,7 +427,7 @@ public:
 	}
 
 	/**
-	 * @brief Read-modify-write: stores @p value and returns the previous value.
+	 * @brief Read-modify-write: stores `value` and returns the previous value.
 	 *
 	 * On single-core targets the read and write are not interrupted by other
 	 * threads (there are none), and the compiler cannot reorder across volatile
@@ -266,7 +445,7 @@ public:
 	 *
 	 * On single-core targets this is always strong - spurious failure is
 	 * impossible without hardware-level LL/SC.  Provided for interface
-	 * compatibility with @c std::atomic.
+	 * compatibility with `std::atomic`.
 	 */
 	bool compare_exchange_weak( T& expected, T desired ) noexcept
 	{
@@ -285,6 +464,31 @@ public:
 	bool compare_exchange_strong( T& expected, T desired ) noexcept
 	{
 		return compare_exchange_weak( expected, desired );
+	}
+
+	/**
+	 * @brief Read-modify-write add: adds `arg` and returns the previous value.
+	 *
+	 * Uninterrupted on a single-core target, and volatile prevents the
+	 * compiler from reordering across the access, so this is safe for
+	 * ISR-vs-main-loop use.  Mirrors `std::atomic<T>::fetch_add`.
+	 */
+	T fetch_add( T arg ) noexcept
+	{
+		T old = _value;
+		_value = static_cast< T >( old + arg );
+		return old;
+	}
+
+	/**
+	 * @brief Read-modify-write subtract: subtracts `arg` and returns the
+	 * previous value.  Mirrors `std::atomic<T>::fetch_sub`.
+	 */
+	T fetch_sub( T arg ) noexcept
+	{
+		T old = _value;
+		_value = static_cast< T >( old - arg );
+		return old;
 	}
 
 	// -------------------------------------------------------------------------
@@ -313,23 +517,78 @@ public:
 		return compare_exchange_strong( expected, desired );
 	}
 
+	template< typename... MemOrder >
+	T fetch_add( T arg, MemOrder&&... ) noexcept { return fetch_add( arg ); }
+
+	template< typename... MemOrder >
+	T fetch_sub( T arg, MemOrder&&... ) noexcept { return fetch_sub( arg ); }
+
+	// pre/post increment and decrement, matching std::atomic
+	T operator++() noexcept { return static_cast< T >( fetch_add( 1 ) + 1 ); }
+	T operator++( int ) noexcept { return fetch_add( 1 ); }
+	T operator--() noexcept { return static_cast< T >( fetch_sub( 1 ) - 1 ); }
+	T operator--( int ) noexcept { return fetch_sub( 1 ); }
+	T operator+=( T arg ) noexcept { return static_cast< T >( fetch_add( arg ) + arg ); }
+	T operator-=( T arg ) noexcept { return static_cast< T >( fetch_sub( arg ) - arg ); }
+
 	// -------------------------------------------------------------------------
 	// Convenience operators
 	// -------------------------------------------------------------------------
 
 	/**
-	 * @brief Implicit conversion - allows @c if ( _destroying ) and similar.
+	 * @brief Implicit conversion - allows `if` ( _destroying ) and similar.
 	 */
 	operator T() const noexcept { return _value; }
 
 	/**
-	 * @brief Assignment - allows @c _flag = true and brace-initialisation.
+	 * @brief Assignment - allows `_flag` = true and brace-initialisation.
 	 */
 	Atomic& operator=( T value ) noexcept { _value = value; return *this; }
 };
 #endif // PULSAR_CUSTOM_ATOMIC
 
+/**
+ * @brief Shared-ownership smart pointer - aliases `std::shared_ptr<T>`.
+ *
+ * Provided in the ST block so the alias is available regardless of
+ * PULSAR_THREAD_SAFE.  `std::shared_ptr` is available via `<memory>`.
+ */
+template< typename T >
+using SharedPtr = std::shared_ptr< T >;
+
+/**
+ * @brief Weak reference to a SharedPtr-managed object - aliases `std::weak_ptr<T>`.
+ */
+template< typename T >
+using WeakPtr = std::weak_ptr< T >;
+
+/**
+ * @brief Dummy thread identity for single-threaded / bare-metal targets.
+ *
+ * Thread identity is meaningless in single-threaded mode; this stub keeps
+ * EventLoop compilable so the same code compiles in both modes.  Replace
+ * with a platform-native handle if the target has cooperative tasks.
+ */
+using ThreadId = int;
+
+/// Always returns 0 in single-threaded mode.
+inline ThreadId currentThreadId() noexcept { return 0; }
+
 #endif // PULSAR_THREAD_SAFE
+
+// ---------------------------------------------------------------------------
+// NullMutex: always-no-op regardless of PULSAR_THREAD_SAFE.
+// Used by SingleThreadedEvent to get zero-overhead locking for callers that
+// guarantee all accesses occur on a single thread.
+// ---------------------------------------------------------------------------
+
+// Satisfies BasicLockable so std::lock_guard<NullMutex> compiles with no-ops.
+struct NullMutex
+{
+	void lock() noexcept {}
+	void unlock() noexcept {}
+	bool try_lock() noexcept { return true; }
+};
 
 } // namespace platform
 } // namespace pulsar

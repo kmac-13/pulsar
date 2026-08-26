@@ -183,9 +183,11 @@ struct CountTrue
 /**
  * @brief Returns only the first handler's return value.
  *
- * Useful when only the highest-priority handler's result matters.
- * With priority ordering, the first handler executed has the highest
- * priority.  Returns T{} for an empty range.
+ * Useful when only one handler's result should matter and the rest exist
+ * purely as observers.  "First" means connection order (CombiningEvent has
+ * no priority mechanism) - the order handlers were connected in, regardless
+ * of which underlying storage slot each one currently occupies.  Returns
+ * T{} for an empty range.
  */
 template< typename T >
 struct First
@@ -202,9 +204,9 @@ struct First
 /**
  * @brief Returns the first non-default return value encountered.
  *
- * Iterates through results in handler priority order and returns the first
- * value that compares unequal to T{}.  Returns T{} if all values are default
- * or the range is empty.
+ * Iterates through results in connection order (see First) and returns the
+ * first value that compares unequal to T{}.  Returns T{} if all values are
+ * default or the range is empty.
  */
 template< typename T >
 struct FirstNonDefault
@@ -222,7 +224,8 @@ struct FirstNonDefault
 /**
  * @brief Returns only the last handler's return value.
  *
- * Useful when only the final (lowest priority) handler's result matters.
+ * Useful when only the final handler's result matters - "final" in
+ * connection order (see First), the order handlers were connected in.
  * Returns T{} for an empty range.
  */
 template< typename T >
@@ -245,9 +248,9 @@ struct Last
 /**
  * @brief Returns the last non-default return value encountered.
  *
- * Iterates through results in reverse handler priority order and returns
- * the last value that compares unequal to T{}.  Returns T{} if all values
- * are default or the range is empty.
+ * Iterates through results in reverse connection order (see First) and
+ * returns the last value that compares unequal to T{}.  Returns T{} if all
+ * values are default or the range is empty.
  */
 template< typename T >
 struct LastNonDefault

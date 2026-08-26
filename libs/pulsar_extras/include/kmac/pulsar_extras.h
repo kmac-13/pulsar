@@ -42,7 +42,6 @@
 #include <kmac/pulsar.h>
 
 // RAII connection helpers
-#include <kmac/pulsar/scoped_connection.h>
 #include <kmac/pulsar/connection_guard.h>
 #include <kmac/pulsar/connection_group.h>
 

@@ -1,57 +1,48 @@
-#ifndef KMAC_PULSAR_PROPERTY_H
-#define KMAC_PULSAR_PROPERTY_H
+#pragma once
+#ifndef NEBULA_PROPERTY_H
+#define NEBULA_PROPERTY_H
 
 /**
  * @file property.h
- * @brief Observable property types built on top of Pulsar events.
+ * @brief Nebula reactive property types built on the refactored Pulsar API.
  *
- * Four property flavours cover the most common data-binding patterns:
+ * Four types form a consistent family.  All expose the same read interface
+ * (implicit cast, get(), changed event) so that VM binding wiring and
+ * NDL-compiled code never need to know which variant they are reading.
  *
- * | Type                            | Read   | Write                  | Value source     |
- * |---------------------------------|--------|------------------------|------------------|
- * | Property<T>                     | anyone | anyone                 | stored           |
- * | ReadOnlyProperty<Owner, T>      | anyone | owner only             | stored           |
- * | ComputedProperty<Owner, Fn, T>  | anyone | owner via invalidate() | cached fn        |
- * | ConstProperty<T>                | anyone | nobody                 | set at construct |
+ *   Property<T>                  - readable and writable by anyone
+ *   ReadOnlyProperty<Owner, T>   - readable externally, writable only by Owner
+ *   ComputedProperty<Owner, T>   - derived value via Owner member function ptr
+ *   ComputedPropertyFn<Owner, T> - derived value via capturing lambda
+ *   ConstProperty<T>             - immutable; changed exists but never fires
  *
- * All four expose a public @c changed event.  Connection syntax is identical
- * to any other Pulsar event:
+ * All four accept a Trackable* (the owning element's 'this') for event
+ * registration.  The owning class should inherit Trackable directly.
  *
- * @code
- * obj->temperature.changed.connect( receiver, &Receiver::onTemperature );
- * @endcode
+ * Member declaration order: value-storage members (_value, _cache, etc.)
+ * are declared BEFORE 'changed' in every class so that declaration order
+ * matches constructor initialization order.  C++ initializes members in
+ * declaration order; the Event constructor registers with the Trackable
+ * owner, so value members must already be valid at that point.
  *
- * @section event_sig Event signature
+ * Connect patterns with the new Pulsar API:
  *
- * @c changed carries @c const @c T& in all cases.  For Direct connections the
- * reference is into the property's stored value, valid for the duration of the
- * synchronous dispatch.  For Deferred connections Pulsar stores arguments in a
- * @c shared_ptr<tuple<decay_t<Args>...>>, copying the value at emission time,
- * so the stored copy remains valid when the handler eventually runs regardless
- * of what happens to the property in the interim.
+ *   // Method pointer - auto-tracks since T derives Trackable (preferred):
+ *   prop.changed.connect( this, &MyClass::onChanged );
  *
- * @section equality Equality guard
+ *   // Lambda - wrap in Callable, pass Trackable& as explicit tracker:
+ *   prop.changed.connect(
+ *       Callable< void( const float& ) >::create( [ this ]( const float& v ) { ... } ),
+ *       *this );
  *
- * @c Property and @c ReadOnlyProperty skip emission when the new value equals
- * the stored value (detected via @c operator== when available).  Use @c setForce()
- * to emit unconditionally, and @c setQuiet() to update the stored value without
- * emitting at all.
- *
- * @section computed ComputedProperty
- *
- * @c ComputedProperty holds a cached value.  The owner calls @c invalidate()
- * whenever a dependency changes; this recomputes the value and fires @c changed.
- * Between invalidations @c get() returns the cached result without re-evaluating
- * the compute function.  Dependency subscription is the caller's responsibility.
- *
- * @section const_prop ConstProperty
- *
- * @c ConstProperty stores a value set at construction and never changes it.
- * @c changed exists but never fires, allowing uniform connection code that does
- * not need to special-case constant properties.
+ * Note on const: Callable::operator() is non-const in the new Pulsar API.
+ * ComputedProperty/ComputedPropertyFn therefore make get() and operator T()
+ * non-const since they may invoke the callable to update the cache.
  */
 
-#include <kmac/pulsar.h>
+#include <kmac/pulsar/callable.h>
+#include <kmac/pulsar/event.h>
+#include <kmac/pulsar/trackable.h>
 
 #include <type_traits>
 #include <utility>
@@ -59,568 +50,508 @@
 namespace kmac {
 namespace pulsar {
 
-// ============================================================================
-// Internal helper: detect operator== without requiring it
-// ============================================================================
-
 namespace detail {
 
+/**
+ * @brief Detects whether T supports operator== against itself.
+ *
+ * Property<T>/ReadOnlyProperty<Owner,T>::set() uses this to skip the
+ * unchanged-value check for types with no equality comparison (e.g. plain
+ * data structs), falling back to always firing changed instead of failing
+ * to compile.
+ */
 template< typename T, typename = void >
-struct HasEqualityOp : std::false_type {};
+struct IsEqualityComparable : std::false_type {};
 
 template< typename T >
-struct HasEqualityOp< T, std::void_t< decltype( std::declval< T >() == std::declval< T >() ) > >
+struct IsEqualityComparable< T, std::void_t< decltype( std::declval< const T& >() == std::declval< const T& >() ) > >
 	: std::true_type {};
 
 template< typename T >
-inline constexpr bool hasEqualityOp = HasEqualityOp< T >::value;
+inline constexpr bool IsEqualityComparable_v = IsEqualityComparable< T >::value;
 
 } // namespace detail
 
-
-// ============================================================================
-// Property<T>
-// Readable and writable by anyone.
-// ============================================================================
-
 /**
- * @brief Observable value readable and writable by any code.
+ * @brief Property<T>
  *
- * @tparam T value type; should be copy-constructible and copy-assignable.
- *   If @p T provides @c operator==, assignments that do not change the value
- *   are silently ignored.  Use @c setForce() to bypass this guard.
- *
- * @code
- * class Config : public pulsar::Object
- * {
- * public:
- *     pulsar::Property< int > maxRetries { this, 3 };
- * };
- *
- * config->maxRetries = 5;            // fires changed(5)
- * config->maxRetries = 5;            // no-op - value unchanged
- * config->maxRetries.setForce( 5 );  // fires changed(5) regardless
- * @endcode
+ * Declaration order: _value first, then changed - so Event construction
+ * (which registers with the Trackable owner) sees an already-valid _value.
  */
 template< typename T >
 class Property
 {
-private:
+	// value storage declared first - initialized before changed
 	T _value;
 
 public:
-	/**
-	 * @brief Construct with owning sender and initial value.
-	 *
-	 * @param sender Object that logically owns this property; typically
-	 *   @c this of the enclosing class
-	 * @param initial starting value
-	 */
-	explicit Property( Object* sender, T initial = T{} );
+	explicit Property( Trackable* owner, T initial = T{} );
 
 	Property( const Property& ) = delete;
 	Property& operator=( const Property& ) = delete;
 	Property( Property&& ) = delete;
 	Property& operator=( Property&& ) = delete;
 
-	/** @brief Fires with the new value whenever the stored value changes. */
-	Event< const T& > changed;
-
 	// -------------------------------------------------------------------------
-	// read
+	// read interface
 	// -------------------------------------------------------------------------
 
-	/** @brief Return the current value. */
+	operator const T&() const;
 	const T& get() const;
 
-	/** @brief Implicit conversion - allows @c T v = obj->property; */
-	operator const T&() const;
-
 	// -------------------------------------------------------------------------
-	// write
+	// write interface
 	// -------------------------------------------------------------------------
 
-	/**
-	 * @brief Set the value; fires @c changed if the value is different.
-	 *
-	 * Equality is tested via @c operator== when available.  For types without
-	 * @c operator==, every call fires @c changed - use @c setForce() explicitly
-	 * to make that intent clear.
-	 */
-	void set( T newValue );
-
-	/** @brief Convenience assignment; equivalent to @c set(). */
-	Property& operator=( T newValue );
+	void set( T newVal );
 
 	/**
-	 * @brief Set the value and fire @c changed unconditionally.
+	 * @brief Set without firing changed - for VM pass-1 initialization.
 	 *
-	 * Bypasses the equality guard.  Useful when @p T has no @c operator==,
-	 * or when downstream observers must always be notified.
+	 * During VM instantiation, the VM sets all literal property values
+	 * quietly in pass 1 before wiring any connections (pass 2), so that
+	 * bindings see correct initial values without spurious emissions
+	 * before anything is connected.
 	 */
-	void setForce( T newValue );
+	void setQuiet( T newVal );
 
 	/**
-	 * @brief Update the stored value without firing @c changed.
+	 * @brief Set and always fire changed, even if value is unchanged.
 	 *
-	 * Useful for silent initialisation or resetting state without side effects.
+	 * Useful when T is a container mutated in-place (e.g. a vector whose
+	 * elements were modified without being replaced), where operator==
+	 * would incorrectly report "no change".
 	 */
-	void setQuiet( T newValue );
+	void setForce( T newVal );
+
+	Property& operator=( T newVal );
+
+	// -------------------------------------------------------------------------
+	// reactive event - declared after _value (see file comment re: order)
+	// -------------------------------------------------------------------------
+
+	Event< const T& > changed;
 };
 
 
-// ============================================================================
-// ReadOnlyProperty<Owner, T>
-// Readable by anyone; writable only by Owner.
-// ============================================================================
+//
+// IMPLEMENTATION
+//
+
+template< typename T >
+inline Property< T >::Property( Trackable* owner, T initial )
+	: _value( std::move( initial ) )
+	, changed( owner )
+{
+}
+
+template< typename T >
+inline Property< T >::operator const T&() const
+{
+	return _value;
+}
+
+template< typename T >
+inline const T& Property< T >::get() const
+{
+	return _value;
+}
+
+template< typename T >
+inline void Property< T >::set( T newVal )
+{
+	if constexpr ( detail::IsEqualityComparable_v< T > )
+	{
+		if ( ! ( newVal == _value ) )
+		{
+			_value = std::move( newVal );
+			changed( _value );
+		}
+	}
+	else
+	{
+		// T has no operator== - can't detect "unchanged", so always fire
+		_value = std::move( newVal );
+		changed( _value );
+	}
+}
+
+template< typename T >
+inline void Property< T >::setQuiet( T newVal )
+{
+	_value = std::move( newVal );
+}
+
+template< typename T >
+inline void Property< T >::setForce( T newVal )
+{
+	_value = std::move( newVal );
+	changed( _value );
+}
+
+template< typename T >
+inline Property< T >& Property< T >::operator=( T newVal )
+{
+	set( std::move( newVal ) );
+	return *this;
+}
+
 
 /**
- * @brief Observable value readable by anyone but writable only by @p Owner.
+ * @brief ReadOnlyProperty<Owner, T>
  *
- * @tparam Owner the class permitted to call @c set(), @c setForce(),
- *   @c setQuiet(), and @c operator=()
- * @tparam T value type
- *
- * @code
- * class Motor : public pulsar::Object
- * {
- * public:
- *     pulsar::ReadOnlyProperty< Motor, int > rpm { this, 0 };
- *
- *     void setRpm( int v ) { rpm = v; }   // OK - Motor is Owner
- * };
- *
- * motor->rpm.get();                   // OK - anyone can read
- * motor->rpm.changed.connect( ... );  // OK - anyone can observe
- * motor->rpm = 1000;                  // compile error
- * @endcode
+ * Readable externally; writable only by Owner (enforced by 'friend Owner').
+ * External code may freely connect to 'changed' - that is the entire point.
  */
 template< typename Owner, typename T >
 class ReadOnlyProperty
 {
 	friend Owner;
 
-private:
+	// value storage declared first
 	T _value;
 
 public:
-	/**
-	 * @brief Construct with owning sender and initial value.
-	 *
-	 * @param sender Object that logically owns this property
-	 * @param initial starting value
-	 */
-	explicit ReadOnlyProperty( Object* sender, T initial = T{} );
+	explicit ReadOnlyProperty( Trackable* owner, T initial = T{} );
 
 	ReadOnlyProperty( const ReadOnlyProperty& ) = delete;
 	ReadOnlyProperty& operator=( const ReadOnlyProperty& ) = delete;
 	ReadOnlyProperty( ReadOnlyProperty&& ) = delete;
 	ReadOnlyProperty& operator=( ReadOnlyProperty&& ) = delete;
 
-	/** @brief Fires with the new value whenever the stored value changes. */
-	Event< const T& > changed;
-
 	// -------------------------------------------------------------------------
-	// read - always public
+	// read interface - public
 	// -------------------------------------------------------------------------
 
-	/** @brief Return the current value. */
+	operator const T&() const;
 	const T& get() const;
 
-	/** @brief Implicit conversion - allows @c T v = obj->property; */
-	operator const T&() const;
+	Event< const T& > changed;
 
 private:
 	// -------------------------------------------------------------------------
-	// write - Owner only
+	// write interface - Owner only
 	// -------------------------------------------------------------------------
 
-	/** @copydoc Property::set */
-	void set( T newValue );
+	void set( T newVal );
+	void setQuiet( T newVal );
+	void setForce( T newVal );
 
-	/** @copydoc Property::operator= */
-	ReadOnlyProperty& operator=( T newValue );
-
-	/** @copydoc Property::setForce */
-	void setForce( T newValue );
-
-	/** @copydoc Property::setQuiet */
-	void setQuiet( T newValue );
+	ReadOnlyProperty& operator=( T newVal );
 };
 
+template< typename Owner, typename T >
+using ROProperty = ReadOnlyProperty< Owner, T >;
 
-// ============================================================================
-// ComputedProperty<Owner, ComputeFn, T>
-// Read-only cached value derived from a compute function.
-// Owner calls invalidate() when dependencies change.
-// ============================================================================
+//
+// IMPLEMENTATION
+//
+
+template< typename Owner, typename T >
+inline ReadOnlyProperty< Owner, T >::ReadOnlyProperty( Trackable* owner, T initial )
+	: _value( std::move( initial ) )
+	, changed( owner )
+{
+}
+
+template< typename Owner, typename T >
+inline ReadOnlyProperty< Owner, T >::operator const T&() const
+{
+	return _value;
+}
+
+template< typename Owner, typename T >
+inline const T& ReadOnlyProperty< Owner, T >::get() const
+{
+	return _value;
+}
+
+template< typename Owner, typename T >
+inline void ReadOnlyProperty< Owner, T >::set( T newVal )
+{
+	if constexpr ( detail::IsEqualityComparable_v< T > )
+	{
+		if ( ! ( newVal == _value ) )
+		{
+			_value = std::move( newVal );
+			changed( _value );
+		}
+	}
+	else
+	{
+		// T has no operator== - can't detect "unchanged", so always fire
+		_value = std::move( newVal );
+		changed( _value );
+	}
+}
+
+template< typename Owner, typename T >
+inline void ReadOnlyProperty< Owner, T >::setQuiet( T newVal )
+{
+	_value = std::move( newVal );
+}
+
+template< typename Owner, typename T >
+inline void ReadOnlyProperty< Owner, T >::setForce( T newVal )
+{
+	_value = std::move( newVal );
+	changed( _value );
+}
+
+template< typename Owner, typename T >
+inline ReadOnlyProperty< Owner, T >& ReadOnlyProperty< Owner, T >::operator=( T newVal )
+{
+	set( std::move( newVal ) );
+	return *this;
+}
+
 
 /**
- * @brief Observable cached value derived from a compute function.
+ * @brief ComputedProperty<Owner, T>
  *
- * The compute function is evaluated once at construction to seed the cache,
- * then again each time @p Owner calls @c invalidate().  Between invalidations
- * @c get() returns the cached value without re-evaluating the function.
+ * Derived value computed by a const member function on Owner.
+ * Zero allocation beyond the cached value - uses a plain member function
+ * pointer, not std::function or Callable.
  *
- * @tparam Owner the class permitted to call @c invalidate()
- * @tparam ComputeFn callable type: must be invocable with no arguments and
- *   return a value convertible to @p T.  A capturing lambda is the most
- *   natural choice; the type is deduced via CTAD or the @c makeComputed()
- *   factory helper.
- * @tparam T the cached value type; deduced from @p ComputeFn's return type
- *   if not specified explicitly
+ * Cache discipline:
+ *   invalidate() - Owner calls this when a dependency changes.  Recomputes
+ *   immediately and fires changed with the new value so downstream bindings
+ *   update in the same emission cycle.  Only Owner may call invalidate().
  *
- * In C++17 the @p ComputeFn type must be nameable at the declaration site.
- * A callable struct is the cleanest approach:
- *
- * @code
- * class Rectangle : public pulsar::Object
- * {
- * public:
- *     pulsar::Property< int > width  { this, 0 };
- *     pulsar::Property< int > height { this, 0 };
- *
- *     struct AreaFn
- *     {
- *         Rectangle* self;
- *         int operator()() const { return self->width.get() * self->height.get(); }
- *     };
- *
- *     pulsar::ComputedProperty< Rectangle, AreaFn > area { this, AreaFn{ this } };
- * };
- * @endcode
- *
- * In C++20, a lambda type can be named directly via @c decltype, removing
- * the need for the callable struct.  Dependency wiring via @c connect follows
- * the same pattern regardless - see the @c makeComputed() factory for an
- * alternative that deduces the function type automatically.
- *
- * @note Dependency wiring is the caller's responsibility.  @c ComputedProperty
- *   does not inspect or subscribe to dependencies automatically.
- *
- * @see makeComputed() for a factory that deduces @p ComputeFn and @p T.
+ *   get() / operator T() - non-const because a lazy recompute via _dirty
+ *   mutates _cache.  Currently invalidate() always recomputes eagerly, so
+ *   _dirty is always false on entry to get() in normal use; the lazy
+ *   path exists as a forward-compatibility hook.
  */
-template< typename Owner, typename ComputeFn, typename T = std::invoke_result_t< ComputeFn > >
+template< typename Owner, typename T >
 class ComputedProperty
 {
 	friend Owner;
 
-private:
-	ComputeFn _compute;
+	// storage declared before changed
+	Owner* _owner;
+	T ( Owner::*_compute )() const;
 	T _cache;
+	bool _dirty;
 
 public:
-	/**
-	 * @brief Construct and evaluate the compute function to seed the cache.
-	 *
-	 * @param sender Object that logically owns this property
-	 * @param fn compute function; captured by value - ensure any references
-	 *   it captures remain valid for the lifetime of the property
-	 */
-	explicit ComputedProperty( Object* sender, ComputeFn fn );
+	using ComputeFn = T ( Owner::* )() const;
+
+	explicit ComputedProperty( Trackable* owner, ComputeFn fn );
 
 	ComputedProperty( const ComputedProperty& ) = delete;
 	ComputedProperty& operator=( const ComputedProperty& ) = delete;
 	ComputedProperty( ComputedProperty&& ) = delete;
 	ComputedProperty& operator=( ComputedProperty&& ) = delete;
 
-	/** @brief Fires with the newly computed value each time @c invalidate() is called. */
-	Event< const T& > changed;
-
 	// -------------------------------------------------------------------------
-	// read - always public
+	// read interface - non-const (cache update is a mutation)
 	// -------------------------------------------------------------------------
 
-	/** @brief Return the cached value. */
-	const T& get() const;
+	operator T();
+	T get();
 
-	/** @brief Implicit conversion - allows @c T v = obj->property; */
-	operator const T&() const;
+	Event< T > changed;
 
 private:
 	// -------------------------------------------------------------------------
-	// invalidation - owner only
+	// invalidation - Owner only
 	// -------------------------------------------------------------------------
 
-	/**
-	 * @brief Recompute the cached value and fire @c changed.
-	 *
-	 * Call this from @p Owner whenever any dependency of the compute function
-	 * changes.  Fires @c changed unconditionally - the compute function is
-	 * assumed to produce a meaningfully different result when called.
-	 */
 	void invalidate();
 };
 
 
-// ============================================================================
-// ConstProperty<T>
-// Set once at construction; changed exists but never fires.
-// ============================================================================
+//
+// IMPLEMENTATION
+//
+
+template< typename Owner, typename T >
+inline ComputedProperty< Owner, T >::ComputedProperty( Trackable* owner, ComputeFn fn )
+	: _owner( static_cast< Owner* >( owner ) )
+	, _compute( fn )
+	, _cache( ( _owner->*fn )() )
+	, _dirty( false )
+	, changed( owner )
+{
+}
+
+template< typename Owner, typename T >
+inline ComputedProperty< Owner, T >::operator T()
+{
+	return get();
+}
+
+template< typename Owner, typename T >
+inline T ComputedProperty< Owner, T >::get()
+{
+	if ( _dirty )
+	{
+		_cache = ( _owner->*_compute )();
+		_dirty = false;
+	}
+	return _cache;
+}
+
+template< typename Owner, typename T >
+inline void ComputedProperty< Owner, T >::invalidate()
+{
+	_cache = ( _owner->*_compute )();
+	_dirty = false;
+	changed( _cache );
+}
+
 
 /**
- * @brief Observable value that is fixed at construction and never changes.
+ * @brief ComputedPropertyFn<Owner, T>
  *
- * @c changed is present and connectable but never fires, allowing uniform
- * binding code that does not need to special-case constant properties.
+ * Lambda-friendly variant of ComputedProperty for cases where the compute
+ * logic doesn't justify a named method, or where the compute function is
+ * a runtime closure (e.g. NDL-authored bindings instantiated by the VM).
  *
- * @tparam T value type
+ * Uses Callable<T()> internally: one heap allocation at construction via
+ * Callable::create(F&&), no std::function, no virtual dispatch.
  *
- * @code
- * class Element : public pulsar::Object
- * {
- * public:
- *     pulsar::ConstProperty< std::string > typeName { this, "Button" };
- * };
- * @endcode
+ * Callable is move-only, so ComputedPropertyFn is non-copyable and
+ * non-movable, consistent with all other property types.
+ *
+ * get() / operator T() are non-const because Callable::operator() is
+ * non-const in the new Pulsar API.
+ */
+template< typename Owner, typename T >
+class ComputedPropertyFn
+{
+	friend Owner;
+
+	// storage declared before changed
+	Callable< T() > _compute;
+	T _cache;
+	bool _dirty;
+
+public:
+	template< typename F >
+	explicit ComputedPropertyFn( Trackable* owner, F&& fn );
+
+	ComputedPropertyFn( const ComputedPropertyFn& ) = delete;
+	ComputedPropertyFn& operator=( const ComputedPropertyFn& ) = delete;
+	ComputedPropertyFn( ComputedPropertyFn&& ) = delete;
+	ComputedPropertyFn& operator=( ComputedPropertyFn&& ) = delete;
+
+	// -------------------------------------------------------------------------
+	// read interface - non-const (Callable::operator() is non-const)
+	// -------------------------------------------------------------------------
+
+	operator T();
+	T get();
+
+	Event< T > changed;
+
+private:
+	// -------------------------------------------------------------------------
+	// invalidation - Owner only
+	// -------------------------------------------------------------------------
+
+	void invalidate();
+};
+
+
+//
+// IMPLEMENTATION
+//
+
+template< typename Owner, typename T >
+template< typename F >
+inline ComputedPropertyFn< Owner, T >::ComputedPropertyFn( Trackable* owner, F&& fn )
+	: _compute( Callable< T() >::create( std::forward< F >( fn ) ) )
+	, _cache( _compute() )
+	, _dirty( false )
+	, changed( owner )
+{
+	static_assert(
+		std::is_invocable_r_v< T, F >,
+		"ComputedPropertyFn: fn must be callable as T()" );
+}
+
+template< typename Owner, typename T >
+inline ComputedPropertyFn< Owner, T >::operator T()
+{
+	return get();
+}
+
+template< typename Owner, typename T >
+inline T ComputedPropertyFn< Owner, T >::get()
+{
+	if ( _dirty )
+	{
+		_cache = _compute();
+		_dirty = false;
+	}
+	return _cache;
+}
+
+template< typename Owner, typename T >
+inline void ComputedPropertyFn< Owner, T >::invalidate()
+{
+	_cache = _compute();
+	_dirty = false;
+	changed( _cache );
+}
+
+
+/**
+ * @brief ConstProperty<T>
+ *
+ * Immutable after construction.  'changed' exists for API uniformity so that
+ * binding code can connect to any property type without special-casing, but
+ * it never fires.  The semantic analyzer uses this to perform dead binding
+ * elimination: bindings whose entire dependency set is ConstProperty values
+ * compile to SET_PROPERTY opcodes rather than live BIND_PROPERTY connections.
  */
 template< typename T >
 class ConstProperty
 {
-private:
+	// value declared before changed
 	const T _value;
 
 public:
-	/**
-	 * @brief Construct with the fixed value.
-	 *
-	 * @param sender Object that logically owns this property
-	 * @param value the permanent value
-	 */
-	explicit ConstProperty( Object* sender, T value );
+	explicit ConstProperty( Trackable* owner, T value );
 
 	ConstProperty( const ConstProperty& ) = delete;
 	ConstProperty& operator=( const ConstProperty& ) = delete;
 	ConstProperty( ConstProperty&& ) = delete;
 	ConstProperty& operator=( ConstProperty&& ) = delete;
 
-	/** @brief Present for interface uniformity; never fires. */
-	Event< const T& > changed;
-
-	// -------------------------------------------------------------------------
-	// read
-	// -------------------------------------------------------------------------
-
-	/** @brief Return the fixed value. */
+	operator const T&() const;
 	const T& get() const;
 
-	/** @brief Implicit conversion - allows @c T v = obj->property; */
-	operator const T&() const;
+	Event< const T& > changed;
 };
 
 
 //
-// Property
-//
-template< typename T >
-Property< T >::Property( Object* sender, T initial )
-	: _value( std::move( initial ) )
-	, changed( sender )
-{
-}
-
-template< typename T >
-const T& Property< T >::get() const
-{
-	return _value;
-}
-
-template< typename T >
-Property< T >::operator const T&() const
-{
-	return _value;
-}
-
-template< typename T >
-void Property< T >::set( T newValue )
-{
-	if constexpr( detail::hasEqualityOp< T > )
-	{
-		if ( _value == newValue )
-		{
-			return;
-		}
-	}
-	_value = std::move( newValue );
-	changed( _value );
-}
-
-template< typename T >
-Property< T >& Property< T >::operator=( T newValue )
-{
-	set( std::move( newValue ) );
-	return *this;
-}
-
-template< typename T >
-void Property< T >::setForce( T newValue )
-{
-	_value = std::move( newValue );
-	changed( _value );
-}
-
-template< typename T >
-void Property< T >::setQuiet( T newValue )
-{
-	_value = std::move( newValue );
-}
-
-
-//
-// ReadOnlyProperty
-//
-
-template< typename Owner, typename T >
-ReadOnlyProperty< Owner, T >::ReadOnlyProperty( Object* sender, T initial )
-	: _value( std::move( initial ) )
-	, changed( sender )
-{
-}
-
-template< typename Owner, typename T >
-const T& ReadOnlyProperty< Owner, T >::get() const
-{
-	return _value;
-}
-
-template< typename Owner, typename T >
-ReadOnlyProperty< Owner, T >::operator const T&() const
-{
-	return _value;
-}
-
-template< typename Owner, typename T >
-void ReadOnlyProperty< Owner, T >::set( T newValue )
-{
-	if constexpr( detail::hasEqualityOp< T > )
-	{
-		if ( _value == newValue )
-		{
-			return;
-		}
-	}
-	_value = std::move( newValue );
-	changed( _value );
-}
-
-template< typename Owner, typename T >
-ReadOnlyProperty< Owner, T >& ReadOnlyProperty< Owner, T >::operator=( T newValue )
-{
-	set( std::move( newValue ) );
-	return *this;
-}
-
-template< typename Owner, typename T >
-void ReadOnlyProperty< Owner, T >::setForce( T newValue )
-{
-	_value = std::move( newValue );
-	changed( _value );
-}
-
-template< typename Owner, typename T >
-void ReadOnlyProperty< Owner, T >::setQuiet( T newValue )
-{
-	_value = std::move( newValue );
-}
-
-
-//
-// ComputedProperty
-//
-
-template< typename Owner, typename ComputeFn, typename T >
-ComputedProperty< Owner, ComputeFn, T >::ComputedProperty( Object* sender, ComputeFn fn )
-	: _compute( std::move( fn ) )
-	, _cache( _compute() )
-	, changed( sender )
-{
-}
-
-template< typename Owner, typename ComputeFn, typename T >
-const T& ComputedProperty< Owner, ComputeFn, T >::get() const
-{
-	return _cache;
-}
-
-template< typename Owner, typename ComputeFn, typename T >
-ComputedProperty< Owner, ComputeFn, T >::operator const T&() const
-{
-	return _cache;
-}
-
-template< typename Owner, typename ComputeFn, typename T >
-void ComputedProperty< Owner, ComputeFn, T >::invalidate()
-{
-	_cache = _compute();
-	changed( _cache );
-}
-
-
-//
-// ConstProperty
+// IMPLEMENTATION
 //
 
 template< typename T >
-ConstProperty< T >::ConstProperty( Object* sender, T value )
+inline ConstProperty< T >::ConstProperty( Trackable* owner, T value )
 	: _value( std::move( value ) )
-	, changed( sender )
+	, changed( owner )
 {
 }
 
 template< typename T >
-const T& ConstProperty< T >::get() const
+inline ConstProperty< T >::operator const T&() const
 {
 	return _value;
 }
 
 template< typename T >
-ConstProperty< T >::operator const T&() const
+inline const T& ConstProperty< T >::get() const
 {
 	return _value;
 }
-
-
-// ============================================================================
-// Factory helper
-// ============================================================================
-
-/**
- * @brief Construct a ComputedProperty, deducing ComputeFn and T automatically.
- *
- * Because @p Owner cannot be deduced from the constructor arguments it must
- * be supplied explicitly; @p ComputeFn and @p T are deduced from @p fn:
- *
- * @code
- * auto area = pulsar::makeComputed< Rectangle >( this, [this] {
- *     return width.get() * height.get();
- * } );
- * @endcode
- *
- * The returned object is typically stored as a member.  The above form is
- * most useful in factory functions or tests; for member declarations the
- * explicit template form is still required.
- *
- * @tparam Owner class permitted to call @c invalidate()
- * @tparam ComputeFn callable type (deduced)
- */
-template< typename Owner, typename ComputeFn >
-auto makeComputed( Object* sender, ComputeFn&& fn )
-	-> ComputedProperty< Owner, std::decay_t< ComputeFn > >
-{
-	return ComputedProperty< Owner, std::decay_t< ComputeFn > >(
-		sender, std::forward< ComputeFn >( fn ) );
-}
-
-
-// ============================================================================
-// Aliases
-// ============================================================================
-
-/** @brief Shorter alias for ReadOnlyProperty. */
-template< typename Owner, typename T >
-using ROProperty = ReadOnlyProperty< Owner, T >;
 
 } // namespace pulsar
 } // namespace kmac
 
-#endif // KMAC_PULSAR_PROPERTY_H
+#endif // NEBULA_PROPERTY_H

@@ -1,58 +1,48 @@
+#pragma once
 #ifndef KMAC_PULSAR_CONNECTION_GUARD_H
 #define KMAC_PULSAR_CONNECTION_GUARD_H
 
 /**
  * @file connection_guard.h
- * @brief Thread-safe ConnectionGuard.
+ * @brief Thread-safe wrapper for a Connection handle.
  *
- * - **ConnectionGuard**:
- *   Mutex-protected wrapper for use when a Connection must be stored in a container
- *   accessed from multiple threads simultaneously.
- */
-
-#include <kmac/pulsar/pulsar_fwd.h>
-#include <kmac/pulsar/connection.h>
-
-namespace kmac {
-namespace pulsar {
-
-/**
- * @brief Thread-safe wrapper for Connection storage in shared containers.
- *
- * Use ConnectionGuard when you need to store Connection handles in containers
- * that are accessed from multiple threads simultaneously.  It serializes all
- * Connection operations through an internal mutex.
+ * ConnectionGuard serialises isConnected(), disconnect(), and block()/
+ * unblock()/isBlocked() through an internal mutex.  Use it when a single
+ * Connection handle is stored in a container that may be read or written
+ * from multiple threads simultaneously.
  *
  * **When to use:**
- * - storing connections in containers accessed by multiple threads
- * - passing connections across thread boundaries
- * - complex multi-threaded connection management
+ *   - a Connection handle is shared across threads and must be
+ *     atomically checked-and-disconnected or swapped
  *
  * **When NOT to use:**
- * - single-threaded scenarios (use Connection directly - no mutex overhead)
- * - when auto-disconnect is sufficient (don't store handles at all)
- * - when Event::disconnect(receiver) works (simpler and faster)
+ *   - single-threaded scenarios (use Connection directly - no mutex overhead)
+ *   - when auto-disconnect via Trackable is sufficient (don't store handles at all)
+ *   - when event.disconnect(tracker) works (simpler and faster)
  *
- * @warning This adds mutex overhead on every operation.  Only use when
- * thread safety of the handle itself is genuinely required.
+ * @warning Adds mutex overhead on every operation.  Only use when thread
+ *   safety of the Connection handle itself is genuinely required.
  *
  * @code
  * class MultiThreadedManager
  * {
  * private:
  *     std::mutex _mutex;
- *     std::vector<ConnectionGuard> _connections;
+ *     std::vector< ConnectionGuard > _connections;
  *
  * public:
- *     void addConnection(Connection conn) {
- *         std::lock_guard<std::mutex> lock(_mutex);
- *         _connections.emplace_back(std::move(conn));
+ *     void addConnection( Connection conn )
+ *     {
+ *         std::lock_guard< std::mutex > lock( _mutex );
+ *         _connections.emplace_back( std::move( conn ) );
  *     }
  *
- *     void disconnectAll() {
- *         std::lock_guard<std::mutex> lock(_mutex);
- *         for (auto& guard : _connections) {
- *             guard.disconnect();   // thread-safe
+ *     void disconnectAll()
+ *     {
+ *         std::lock_guard< std::mutex > lock( _mutex );
+ *         for ( auto& guard : _connections )
+ *         {
+ *             guard.disconnect();
  *         }
  *     }
  * };
@@ -60,11 +50,18 @@ namespace pulsar {
  *
  * @see Connection for detailed thread safety notes
  */
+
+#include <kmac/pulsar/connection.h>
+#include <kmac/pulsar/platform.h>
+
+namespace kmac {
+namespace pulsar {
+
 class ConnectionGuard
 {
 private:
 	mutable platform::Mutex _mutex;
-	Connection _conn;
+	Connection _conn;  ///<  guarded connection handle
 
 public:
 	/**
@@ -75,7 +72,38 @@ public:
 	explicit ConnectionGuard( Connection conn );
 
 	/**
-	 * @brief Thread-safe check, returns true if the connection is active.
+	 * @brief Move constructor, transfers the wrapped Connection.
+	 *
+	 * `other` is left wrapping a moved-from (empty) Connection - safe to
+	 * call every method on it afterward, all reporting "not connected".
+	 */
+	ConnectionGuard( ConnectionGuard&& other ) noexcept;
+
+	/**
+	 * @brief Move assignment, replaces the wrapped Connection with `other`'s.
+	 *
+	 * This does NOT disconnect the connection currently wrapped by this
+	 * guard - it simply stops being reachable through this guard and keeps
+	 * running as an ordinary live connection on its event.  Contrast with
+	 * ConnectionGroup::operator=, which explicitly disconnects its entire
+	 * current contents before taking ownership of the source's connections:
+	 * a ConnectionGuard wraps a single handle whose job is just to track
+	 * *which* connection you're pointing at, so silently disconnecting the
+	 * previous one on every reassignment would be surprising and
+	 * destructive.  If you want the old connection gone, disconnect() it
+	 * explicitly before reassigning.
+	 */
+	ConnectionGuard& operator=( ConnectionGuard&& other ) noexcept;
+
+	ConnectionGuard( const ConnectionGuard& ) = delete;
+	ConnectionGuard& operator=( const ConnectionGuard& ) = delete;
+
+	~ConnectionGuard() = default;
+
+	/**
+	 * @brief Thread-safe liveness check.
+	 *
+	 * @return true if the connection is still active
 	 */
 	bool isConnected() const;
 
@@ -85,51 +113,82 @@ public:
 	void disconnect();
 
 	/**
-	 * @brief Thread-safe blocked check.
+	 * @brief Thread-safe per-connection blocked check.
+	 *
+	 * @return true if this specific connection is currently blocked
 	 */
 	bool isBlocked() const;
 
 	/**
-	 * @brief Thread-safe block.
+	 * @brief Thread-safe per-connection block - suppresses dispatch
+	 * through this connection only, leaving every other connection on
+	 * the same event unaffected.
 	 */
 	void block();
 
 	/**
-	 * @brief Thread-safe unblock.
+	 * @brief Thread-safe per-connection unblock.
 	 */
 	void unblock();
 };
 
-ConnectionGuard::ConnectionGuard( Connection conn )
+
+//
+// IMPLEMENTATION
+//
+
+inline ConnectionGuard::ConnectionGuard( Connection conn )
 	: _conn( std::move( conn ) )
 {
 }
 
-bool ConnectionGuard::isConnected() const
+inline ConnectionGuard::ConnectionGuard( ConnectionGuard&& other ) noexcept
+{
+	// lock other before moving so the move is atomic with respect to
+	// concurrent isConnected() / disconnect() calls on other
+	platform::LockGuard< platform::Mutex > lock( other._mutex );
+	_conn = std::move( other._conn );
+}
+
+inline ConnectionGuard& ConnectionGuard::operator=( ConnectionGuard&& other ) noexcept
+{
+	if ( this != &other )
+	{
+		// acquire both locks without deadlock risk: always lock lower address first
+		platform::Mutex* first = &_mutex < &other._mutex ? &_mutex : &other._mutex;
+		platform::Mutex* second = &_mutex < &other._mutex ? &other._mutex : &_mutex;
+		platform::LockGuard< platform::Mutex > lockA( *first );
+		platform::LockGuard< platform::Mutex > lockB( *second );
+		_conn = std::move( other._conn );
+	}
+	return *this;
+}
+
+inline bool ConnectionGuard::isConnected() const
 {
 	platform::LockGuard< platform::Mutex > lock( _mutex );
 	return _conn.isConnected();
 }
 
-void ConnectionGuard::disconnect()
+inline void ConnectionGuard::disconnect()
 {
 	platform::LockGuard< platform::Mutex > lock( _mutex );
 	_conn.disconnect();
 }
 
-bool ConnectionGuard::isBlocked() const
+inline bool ConnectionGuard::isBlocked() const
 {
 	platform::LockGuard< platform::Mutex > lock( _mutex );
 	return _conn.isBlocked();
 }
 
-void ConnectionGuard::block()
+inline void ConnectionGuard::block()
 {
 	platform::LockGuard< platform::Mutex > lock( _mutex );
 	_conn.block();
 }
 
-void ConnectionGuard::unblock()
+inline void ConnectionGuard::unblock()
 {
 	platform::LockGuard< platform::Mutex > lock( _mutex );
 	_conn.unblock();

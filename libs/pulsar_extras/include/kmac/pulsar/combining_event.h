@@ -1,3 +1,4 @@
+#pragma once
 #ifndef KMAC_PULSAR_COMBINING_EVENT_H
 #define KMAC_PULSAR_COMBINING_EVENT_H
 
@@ -5,607 +6,1075 @@
  * @file combining_event.h
  * @brief Event that collects and aggregates handler return values.
  *
- * CombiningEvent<ReturnType, Combiner, Args...> fires all connected handlers
- * and passes their return values through a Combiner functor to produce a single
- * result.  This is useful for patterns like validation pipelines, consensus
- * queries, and aggregated data collection.
+ * CombiningEvent<Combiner, ReturnType, Args...> fires all connected handlers
+ * and passes their return values through a Combiner functor to produce a
+ * single result.  Useful for validation pipelines, consensus queries, and
+ * aggregated data collection.
  *
  * @code
- * // validate that all checkers approve an input string
- * CombiningEvent<bool, Combiners::LogicalAnd<>, std::string> validate{this};
- *
- * validate.connect(checker1, &Checker::check);
- * validate.connect(checker2, &Checker::check);
- *
- * bool allOk = validate("input");   // true only if every checker returns true
+ * CombiningEvent< Combiners::LogicalAnd<>, bool, std::string > validate { this };
+ * validate.connect< &Checker::check >( checker1 );
+ * validate.connect< &Checker::check >( checker2 );
+ * bool allOk = validate( "input" );
  * @endcode
  *
- * @section combiners Built-in Combiners
+ * @section template_order Template argument order
  *
- * See combiners.h for the full list.  All combiners accept a range of return
- * values and produce a single result.
+ * Combiner comes first, with ReturnType and Args... adjacent to each other
+ * since together they describe the handler call signature ReturnType(Args...).
+ *
+ * @section connect_buckets Connection API
+ *
+ * The connection API is split into three named buckets, matching EventStorage:
+ *
+ *   connect / connectOnce
+ *       - object/method connections: NTTP method pointer or runtime
+ *         pointer-to-member-function, with or without an explicit
+ *         Tracked<T> tracker
+ *
+ *   connectFree / connectOnceFree
+ *       - free function connections: NTTP function pointer or runtime
+ *         function pointer
+ *
+ *   connectLambda / connectOnceLambda
+ *       - capturing lambda / arbitrary functor connections, either as a
+ *         pre-wrapped Callable or as a raw functor that gets wrapped
+ *         internally, with or without an explicit Trackable& tracker
+ *
+ * disconnect() / disconnectFree() are split the same way.
  *
  * @section threading Threading
  *
- * CombiningEvent only supports Direct connections - there is no Deferred variant
- * because the return value must be available synchronously.  All connected
- * handlers are invoked on the triggering thread.
+ * CombiningEvent protects its slot table with a plain (non-recursive) mutex.
+ * Reentrancy from within a handler is not supported - do not connect,
+ * disconnect, or trigger this event from inside a connected handler.
+ *
+ * All handlers are invoked Direct (synchronously on the triggering thread).
+ * There is no Deferred variant because the return value must be available
+ * synchronously.
+ *
+ * @section lifetime Receiver lifetime
+ *
+ * When a receiver inherits from Trackable (or a Tracked<T> bundle is passed),
+ * connections are automatically disconnected when the receiver is destroyed.
+ * Untracked callable connections must be disconnected manually before any
+ * captured state is invalidated.
  *
  * @see combiners.h for available Combiner types
  */
 
-#include <kmac/pulsar/pulsar_fwd.h>
-#include <kmac/pulsar/config.h>
+#include <kmac/pulsar/callable.h>
 #include <kmac/pulsar/connection.h>
-#include <kmac/pulsar/object.h>
+#include <kmac/pulsar/event_flags.h>
+#include <kmac/pulsar/event_impl_base.h>
+#include <kmac/pulsar/gen_data.h>
+#include <kmac/pulsar/platform.h>
+#include <kmac/pulsar/trackable.h>
 
-#include <algorithm>
 #include <memory>
-#include <optional>
 #include <type_traits>
 #include <vector>
+
+#include <algorithm>  // for std::remove / std::remove_if / std::find (order maintenance)
 
 namespace kmac {
 namespace pulsar {
 
+// Tracked<T> is defined in event_storage.h; forward-declare so
+// combining_event.h does not have to include the full event machinery.
+template< typename T >
+struct Tracked;
+
+
+// ===========================================================================
+// CombiningHandlerEntry
+// ===========================================================================
+
+/**
+ * @brief One handler slot inside CombiningEventImpl.
+ *
+ * Parallels HandlerEntry<Args...> but carries Callable<ReturnType(Args...)>
+ * instead of Callable<void(Args...)>.  No EventLoop fields are needed -
+ * CombiningEvent is always Direct.
+ */
+template< typename ReturnType, typename... Args >
+struct CombiningHandlerEntry
+{
+	using HandlerType = Callable< ReturnType( Args... ) >;
+
+	HandlerType handler;
+
+	/// per-connection tag required by Trackable::trackConnection(); unused
+	/// for task migration since there is no deferred dispatch.  Sourced from
+	/// the receiver's Trackable::migrationTag() the same way BasicEvent's
+	/// connections are, purely for consistency - it plays no functional role
+	/// here.
+	uint64_t connectionTag = 0;
+
+	EventFlags flags;         ///< active + singleShot bits
+	uint16_t generation = 0;  ///< generation counter for stale-handle detection
+
+	void init( HandlerType&& h, uint64_t tag, bool singleShot );
+};
+
+template< typename ReturnType, typename... Args >
+inline void CombiningHandlerEntry< ReturnType, Args... >::init(
+	HandlerType&& h,
+	uint64_t tag,
+	bool singleShot )
+{
+	handler = std::move( h );
+	connectionTag = tag;
+	flags.setActive( true );
+	flags.setIsSingleShot( singleShot );
+}
+
+
+// ===========================================================================
+// CombiningEventImpl
+// ===========================================================================
+
+/**
+ * @brief Heap-allocated implementation object for CombiningEvent.
+ *
+ * Inherits EventImplBase so that the standard Connection handle and Trackable
+ * tracking machinery work without modification.  EventLoop-related overrides
+ * are no-ops because CombiningEvent is always Direct.
+ */
+template< typename ReturnType, typename... Args >
+struct CombiningEventImpl : EventImplBase
+{
+	using HandlerType = Callable< ReturnType( Args... ) >;
+	using EntryType = CombiningHandlerEntry< ReturnType, Args... >;
+
+	mutable platform::Mutex mutex;
+	std::vector< EntryType > handlers;
+
+	/**
+	 * @brief Slot indices in true chronological connection order, used to
+	 * drive emit() iteration so results are combined in connection order
+	 * even after a disconnect frees a slot that a later connection reuses
+	 * (handlers itself is stable-slot storage and is never reordered, since
+	 * Connection addresses its target by fixed index - see EntryType).
+	 */
+	std::vector< uint32_t > order;
+
+	/// earliest known free slot; handlers.size() when none is known
+	uint32_t nextFree = 0;
+
+	/**
+	 * @brief Whole-event block depth (see EventImpl's identical member for
+	 * the full rationale) - always atomic here, unlike EventImpl, since
+	 * CombiningEventImpl always uses platform::Mutex and has no
+	 * SingleThreadedEvent-equivalent variant to special-case.
+	 */
+	platform::Atomic< unsigned int > blockDepth { 0 };
+
+	bool isBlocked() const noexcept
+	{
+		return blockDepth.load( std::memory_order_relaxed ) > 0;
+	}
+
+	void block() noexcept
+	{
+		blockDepth.fetch_add( 1, std::memory_order_relaxed );
+	}
+
+	void unblock() noexcept
+	{
+		unsigned int current = blockDepth.load( std::memory_order_relaxed );
+		while ( current > 0
+			&& ! blockDepth.compare_exchange_weak(
+				current, current - 1, std::memory_order_relaxed ) )
+		{
+		}
+	}
+
+	// ---- EventImplBase overrides -------------------------------------------
+
+	bool isHandlerConnected( uint32_t index, uint32_t generation ) const override;
+	void disconnectHandler( uint32_t index, uint32_t generation ) override;
+	void disconnectHandlers( const std::vector< GenData >& entries ) override;
+
+	bool isHandlerBlocked( uint32_t index, uint32_t generation ) const override;
+	void blockHandler( uint32_t index, uint32_t generation ) override;
+	void unblockHandler( uint32_t index, uint32_t generation ) override;
+
+	// CombiningEvent is Direct-only - EventLoop operations are no-ops
+	void updateSenderLoop( EventLoop* ) override {}
+	void updateHandlerLoop( uint32_t, uint32_t, EventLoop* ) override {}
+	void invokeDeferred( uint32_t, uint32_t, const std::shared_ptr< void >& ) override {}
+
+	// ---- API called directly by CombiningEvent -----------------------------
+
+	/// disconnect all active slots, caller must hold mutex
+	void preLockDisconnectAll();
+
+private:
+	// ---- internal plumbing - nothing outside CombiningEventImpl calls these -
+
+	/**
+	 * @brief True if `index` currently holds a live connection matching
+	 * `generation` (in range, active, generation matches).
+	 */
+	bool isSlotLive( uint32_t index, uint32_t generation ) const;
+
+	/**
+	 * @brief Disconnects the connection at `index`.
+	 *
+	 * Precondition: caller holds `mutex` and has already confirmed the slot
+	 * is live (via slotLive()).
+	 *
+	 * Releases the handler, marks the slot inactive, bumps its generation so
+	 * a stale Connection can no longer reach it, and returns the slot to
+	 * `nextFree` if it is now the earliest known free slot.
+	 *
+	 * Shared by disconnectHandler() and disconnectHandlers() so this logic
+	 * is written once.
+	 */
+	void disconnectSlotLocked( uint32_t index );
+};
+
+// ---------------------------------------------------------------------------
+
+template< typename ReturnType, typename... Args >
+inline bool CombiningEventImpl< ReturnType, Args... >::isHandlerConnected( uint32_t index, uint32_t generation ) const
+{
+	platform::LockGuard< platform::Mutex > lock( mutex );
+	return isSlotLive( index, generation );
+}
+
+template< typename ReturnType, typename... Args >
+inline void CombiningEventImpl< ReturnType, Args... >::disconnectHandler( uint32_t index, uint32_t generation )
+{
+	platform::LockGuard< platform::Mutex > lock( mutex );
+
+	if ( ! isSlotLive( index, generation ) )
+	{
+		return;
+	}
+
+	disconnectSlotLocked( index );
+}
+
+template< typename ReturnType, typename... Args >
+inline void CombiningEventImpl< ReturnType, Args... >::disconnectHandlers( const std::vector< GenData >& entries )
+{
+	platform::LockGuard< platform::Mutex > lock( mutex );
+
+	for ( auto [ index, generation ] : entries )
+	{
+		if ( ! isSlotLive( index, generation ) )
+		{
+			continue;
+		}
+
+		disconnectSlotLocked( index );
+	}
+}
+
+template< typename ReturnType, typename... Args >
+inline bool CombiningEventImpl< ReturnType, Args... >::isHandlerBlocked( uint32_t index, uint32_t generation ) const
+{
+	platform::LockGuard< platform::Mutex > lock( mutex );
+	if ( ! isSlotLive( index, generation ) )
+	{
+		return false;
+	}
+	return handlers[ index ].flags.isBlocked();
+}
+
+template< typename ReturnType, typename... Args >
+inline void CombiningEventImpl< ReturnType, Args... >::blockHandler( uint32_t index, uint32_t generation )
+{
+	platform::LockGuard< platform::Mutex > lock( mutex );
+	if ( ! isSlotLive( index, generation ) )
+	{
+		return;
+	}
+	handlers[ index ].flags.setBlocked( true );
+}
+
+template< typename ReturnType, typename... Args >
+inline void CombiningEventImpl< ReturnType, Args... >::unblockHandler( uint32_t index, uint32_t generation )
+{
+	platform::LockGuard< platform::Mutex > lock( mutex );
+	if ( ! isSlotLive( index, generation ) )
+	{
+		return;
+	}
+	handlers[ index ].flags.setBlocked( false );
+}
+
+template< typename ReturnType, typename... Args >
+inline void CombiningEventImpl< ReturnType, Args... >::preLockDisconnectAll()
+{
+	for ( uint32_t i = 0; i < static_cast< uint32_t >( handlers.size() ); ++i )
+	{
+		if ( ! handlers[ i ].flags.isActive() )
+		{
+			continue;
+		}
+		handlers[ i ].flags.setActive( false );
+		handlers[ i ].generation++;
+		handlers[ i ].handler = HandlerType{};
+	}
+	order.clear();
+	nextFree = 0;
+}
+
+template< typename ReturnType, typename... Args >
+inline bool CombiningEventImpl< ReturnType, Args... >::isSlotLive( uint32_t index, uint32_t generation ) const
+{
+	return index < handlers.size()
+		&& handlers[ index ].generation == generation
+		&& handlers[ index ].flags.isActive();
+}
+
+template< typename ReturnType, typename... Args >
+inline void CombiningEventImpl< ReturnType, Args... >::disconnectSlotLocked( uint32_t index )
+{
+	handlers[ index ].flags.setActive( false );
+	handlers[ index ].generation++;
+	{
+		HandlerType released = std::move( handlers[ index ].handler );
+	}
+
+	order.erase( std::remove( order.begin(), order.end(), index ), order.end() );
+
+	if ( index < nextFree )
+	{
+		nextFree = index;
+	}
+}
+
+
+// ===========================================================================
+// CombiningEvent
+// ===========================================================================
+
 /**
  * @brief Event that collects handler return values and combines them.
  *
- * @tparam ReturnType the type returned by each handler and by the event itself
- * @tparam Combiner functor that reduces a range of ReturnType values to one
+ * @tparam Combiner functor: (Iter first, Iter last) -> ReturnType
+ * @tparam ReturnType type returned by each handler and by the event itself
  * @tparam Args argument types forwarded to every handler
  */
-template< typename ReturnType, typename Combiner, typename... Args >
+template< typename Combiner, typename ReturnType, typename... Args >
 class CombiningEvent
 {
-private:
-	// ======================================================================
-	// ConnectionImpl<HandlerFunc>
-	// Stores one typed handler and manages its lifecycle.
-	// ======================================================================
-
-	template< typename HandlerFunc >
-	class ConnectionImpl : public ConnectionBase
-	{
-	private:
-		CombiningEvent* _event;
-		std::weak_ptr< Object > _sender;
-		std::weak_ptr< Object > _receiver;
-		HandlerFunc _handler;
-		bool _singleShot;
-
-	public:
-		ConnectionImpl(
-			CombiningEvent* event,
-			std::weak_ptr< Object > sender,
-			std::weak_ptr< Object > receiver,
-			HandlerFunc&& handler,
-			bool singleShot = false );
-
-		bool isConnected() const override;
-
-		void disconnect() override;
-
-		bool isBlocked() const override;
-
-		void block() override;
-		void unblock() override;
-
-		/**
-		 * @brief No-op: CombiningEvent does not support Deferred connections.
-		 */
-		void beginMigration() override;
-
-		/**
-		 * @brief No-op: CombiningEvent does not support Deferred connections.
-		 */
-		void updateEventLoop( EventLoop* ) override;
-
-		/**
-		 * @brief Invoke the handler and return the result.
-		 *
-		 * Returns std::nullopt if the connection is disconnected, blocked, or
-		 * the receiver has been destroyed.  Disconnects and returns nullopt if
-		 * single-shot and the handler was called.
-		 */
-		std::optional< ReturnType > invoke( Args... args );
-	};
-
-	// ======================================================================
-	// ConnectionWrapperBase / ConnectionWrapper<HandlerFunc>
-	// Type-erased wrappers stored in the connections vector.
-	// ======================================================================
-
-	class ConnectionWrapperBase
-	{
-	public:
-		virtual ~ConnectionWrapperBase() = default;
-		virtual std::shared_ptr< ConnectionBase > getBase() = 0;
-		virtual bool isConnected() const = 0;
-		virtual std::optional< ReturnType > invoke( Args... args ) = 0;
-		virtual void disconnect() = 0;
-	};
-
-	template< typename HandlerFunc >
-	class ConnectionWrapper : public ConnectionWrapperBase
-	{
-	private:
-		std::shared_ptr< ConnectionImpl< HandlerFunc > > _impl;
-
-	public:
-		ConnectionWrapper( std::shared_ptr< ConnectionImpl< HandlerFunc > > impl );
-
-		std::shared_ptr< ConnectionBase > getBase() override;
-		bool isConnected() const override;
-		std::optional< ReturnType > invoke( Args... args ) override;
-		void disconnect() override;
-	};
+public:
+	using HandlerType = Callable< ReturnType( Args... ) >;
 
 private:
-	Object* _senderObj;
+	using Impl = CombiningEventImpl< ReturnType, Args... >;
+
+	platform::SharedPtr< Impl > _impl { std::make_shared< Impl >() };
 	Combiner _combiner;
-	mutable platform::Mutex _mutex;
-	std::vector< std::unique_ptr< ConnectionWrapperBase > > _connections;
 
 public:
+	/// Construct with no owner.
+	CombiningEvent() = default;
+
 	/**
-	 * @brief Construct a CombiningEvent belonging to @p sender.
+	 * @brief Construct with an owner Trackable.
 	 *
-	 * @p sender must outlive the event.  Pass @c this for typical member usage.
+	 * The owner is accepted for API consistency with BasicEvent.
+	 * CombiningEvent is Direct-only so the sender EventLoop is not used.
 	 */
-	CombiningEvent( Object* sender );
+	explicit CombiningEvent( Trackable* owner );
 
-	~CombiningEvent();
+	~CombiningEvent() = default;
 
-	// ======================================================================
-	// Event Triggering - three equivalent methods
-	// ======================================================================
+	CombiningEvent( const CombiningEvent& ) = delete;
+	CombiningEvent& operator=( const CombiningEvent& ) = delete;
+	CombiningEvent( CombiningEvent&& ) = default;
+	CombiningEvent& operator=( CombiningEvent&& ) = default;
+
+	// =========================================================================
+	// triggering
+	// =========================================================================
 
 	/**
-	 * @brief Invoke all handlers and return the combined result (idiomatic
-	 * C++ operator-call style).
+	 * @brief Invoke all handlers and return the combined result.
 	 *
-	 * Handlers are invoked in the order they were connected.  If no handlers
-	 * are connected the combiner is called with an empty range and returns
-	 * its default result.
+	 * Handlers are invoked while holding the internal mutex; reentrancy
+	 * (connecting, disconnecting, or re-triggering from inside a handler)
+	 * is not supported and will deadlock.  Arguments are passed as lvalues
+	 * so every handler receives the same values.
+	 *
+	 * Returns the combiner's empty-range result if the event is blocked or
+	 * no handlers are connected.
 	 */
 	ReturnType operator()( Args... args );
 
-	/**
-	 * @brief Identical to operator().  Explicit trigger alternative.
-	 */
+	/// Identical to operator().
 	ReturnType trigger( Args... args );
 
-	/**
-	 * @brief Identical to operator().  Explicit emit alternative.
-	 */
+	/// Identical to operator().
 	ReturnType emit( Args... args );
 
-	// ======================================================================
-	// Connection Methods
-	// ======================================================================
+	// =========================================================================
+	// blocking
+	// =========================================================================
+
+	/// Increment the block count; triggers are dropped while count > 0.
+	void block();
+
+	/// Decrement the block count.
+	void unblock();
 
 	/**
-	 * @brief Connect a lambda or functor.
+	 * @brief RAII block guard - blocks on construction, unblocks on destruction.
+	 * Guards nest correctly.
+	 */
+	[[ nodiscard ]] BlockGuard blockGuard();
+
+	// =========================================================================
+	// object / method connections
+	// =========================================================================
+
+	/**
+	 * @brief Connect a member function via NTTP.
 	 *
-	 * @param receiver shared ownership of the receiving Object
-	 * @param handler callable returning ReturnType and accepting Args
-	 * @return Connection handle
-	 */
-	template< typename HandlerFunc >
-	Connection connect( std::shared_ptr< Object > receiver, HandlerFunc&& handler );
-
-	/**
-	 * @brief Connect a member function returning ReturnType.
+	 * Auto-disconnect is registered when @p receiver derives from Trackable.
 	 *
-	 * @param receiver shared ownership of the receiver, must derive from Object
-	 * @param method pointer-to-member-function returning ReturnType
-	 * @param singleShot whether to disconnect after first invokation
-	 * @return Connection handle
+	 * @code
+	 * event.connect< &MyClass::onQuery >( myObj );
+	 * @endcode
 	 */
-	template< typename ReceiverType, typename... HandlerArgs >
-	Connection connect(
-		std::shared_ptr< ReceiverType > receiver,
-		ReturnType ( ReceiverType::*method )( HandlerArgs... ),
-		bool singleShot = false );
+	template< auto Method, typename T >
+	Connection connect( T& receiver );
 
 	/**
-	 * @brief Connect a lambda that auto-disconnects after its first invocation.
+	 * @brief NTTP connect with an explicit tracker.
 	 *
-	 * @param receiver shared ownership of the receiver
-	 * @param handler handler callable
-	 * @return Connection handle
+	 * @code
+	 * Anchor anchor;
+	 * event.connect< &MyClass::onQuery >( Tracked{ obj, anchor } );
+	 * @endcode
 	 */
-	template< typename HandlerFunc >
-	Connection connectOnce( std::shared_ptr< Object > receiver, HandlerFunc&& handler );
+	template< auto Method, typename T >
+	Connection connect( Tracked< T > tracked );
+
+	/// Connect a runtime pointer-to-member-function.
+	template< typename T >
+	Connection connect( T& receiver, ReturnType ( T::*method )( Args... ) );
+
+	/// Runtime PMF connect with explicit tracker.
+	template< typename T >
+	Connection connect( Tracked< T > tracked, ReturnType ( T::*method )( Args... ) );
+
+	/// NTTP single-shot connect.
+	template< auto Method, typename T >
+	Connection connectOnce( T& receiver );
+
+	/// NTTP single-shot connect with tracker.
+	template< auto Method, typename T >
+	Connection connectOnce( Tracked< T > tracked );
+
+	/// Runtime PMF single-shot connect.
+	template< typename T >
+	Connection connectOnce( T& receiver, ReturnType ( T::*method )( Args... ) );
+
+	/// Runtime PMF single-shot connect with tracker.
+	template< typename T >
+	Connection connectOnce( Tracked< T > tracked, ReturnType ( T::*method )( Args... ) );
+
+	// =========================================================================
+	// free-function connections
+	// =========================================================================
 
 	/**
-	 * @brief Connect a member function that auto-disconnects after first invocation.
+	 * @brief Connect a free function via NTTP.
 	 *
-	 * @param receiver shared ownership of the receiver
-	 * @param method pointer-to-member-function
-	 * @return Connection handle
+	 * @code
+	 * event.connectFree< &myFreeFunction >();
+	 * @endcode
 	 */
-	template< typename ReceiverType, typename... HandlerArgs >
-	Connection connectOnce( std::shared_ptr< ReceiverType > receiver, ReturnType ( ReceiverType::*method )( HandlerArgs... ) );
+	template< ReturnType (*Func)( Args... ) >
+	Connection connectFree();
+
+	/// Connect a runtime free-function pointer.
+	Connection connectFree( ReturnType (*func)( Args... ) );
+
+	/// NTTP single-shot free-function connect.
+	template< ReturnType (*Func)( Args... ) >
+	Connection connectOnceFree();
+
+	/// Runtime free-function single-shot connect.
+	Connection connectOnceFree( ReturnType (*func)( Args... ) );
+
+	// =========================================================================
+	// lambda / Callable connections
+	// =========================================================================
 
 	/**
-	 * @brief Disconnect and remove all connections.
+	 * @brief Connect a pre-wrapped Callable.
+	 *
+	 * No automatic lifetime tracking - disconnect before captures are
+	 * invalidated.
 	 */
+	Connection connectLambda( HandlerType&& handler );
+
+	/// Pre-wrapped Callable connect with explicit tracker.
+	Connection connectLambda( Trackable& tracker, HandlerType&& handler );
+
+	/**
+	 * @brief Connect a functor (typically a capturing lambda) directly,
+	 * without the caller needing to wrap it in Callable::create() first.
+	 *
+	 * @code
+	 * event.connectLambda( [ this ]( int x ) { return onQuery( x ); } );
+	 * @endcode
+	 */
+	template< typename F,
+		typename = std::enable_if_t< ! std::is_base_of_v< Trackable, std::remove_reference_t< F > > > >
+	Connection connectLambda( F&& functor );
+
+	/// Raw functor connect with explicit tracker.
+	template< typename F >
+	Connection connectLambda( Trackable& tracker, F&& functor );
+
+	/// Pre-wrapped Callable single-shot connect.
+	Connection connectOnceLambda( HandlerType&& handler );
+
+	/// Pre-wrapped Callable single-shot connect with tracker.
+	Connection connectOnceLambda( Trackable& tracker, HandlerType&& handler );
+
+	/// Raw functor single-shot connect, wrapped internally.
+	template< typename F,
+		typename = std::enable_if_t< ! std::is_base_of_v< Trackable, std::remove_reference_t< F > > > >
+	Connection connectOnceLambda( F&& functor );
+
+	/// Raw functor single-shot connect with tracker, wrapped internally.
+	template< typename F >
+	Connection connectOnceLambda( Trackable& tracker, F&& functor );
+
+	// =========================================================================
+	// disconnection
+	// =========================================================================
+
+	/// Disconnect all connections tracked by @p tracker.
+	void disconnect( Trackable& tracker );
+
+	/// Disconnect all connections to a specific NTTP method on a receiver.
+	template< auto Method, typename T >
+	void disconnect( T& receiver );
+
+	/// Disconnect all connections to a specific NTTP free function.
+	template< ReturnType (*Func)( Args... ) >
+	void disconnectFree();
+
+	/// Disconnect all connections to a specific runtime free-function pointer.
+	void disconnectFree( ReturnType (*func)( Args... ) );
+
+	/// Disconnect every active connection on this event.
 	void disconnectAll();
 
+	// =========================================================================
+	// inspection
+	// =========================================================================
+
 	/**
-	 * @brief Returns the number of entries in the connection list.
-	 *
-	 * Includes dead connections not yet pruned.
+	 * @brief Total number of slots (includes inactive slots awaiting reuse).
+	 * Useful for debugging; not a count of live connections.
 	 */
-	std::size_t connectionCount() const;
+	std::size_t slotCount() const;
 
 private:
-	/**
-	 * @brief Shared implementation for all connect overloads.
-	 */
-	template< typename HandlerFunc >
-	Connection connectInternal( std::shared_ptr< Object > receiver, HandlerFunc&& handler, bool singleShot );
-
-	/**
-	 * @brief Remove the wrapper for @p impl.  Called by ConnectionImpl::disconnect().
-	 */
-	void removeConnection( ConnectionBase* impl );
+	Connection connectImpl( HandlerType&& handler, Trackable* tracker, bool singleShot );
 };
 
-/**
- * @brief Alias for users that prefer signal/emit terminology.
- */
-template< typename ReturnType, typename Combiner, typename... Args >
-using CombiningSignal = CombiningEvent< ReturnType, Combiner, Args... >;
 
+// ===========================================================================
+// constructor
+// ===========================================================================
 
-//
-// COMBINING EVENT
-//
-
-template< typename ReturnType, typename Combiner, typename... Args >
-CombiningEvent< ReturnType, Combiner, Args... >::CombiningEvent( Object* sender )
-	: _senderObj( sender )
-	, _combiner()
+template< typename Combiner, typename ReturnType, typename... Args >
+inline CombiningEvent< Combiner, ReturnType, Args... >::CombiningEvent( Trackable* /*owner*/ )
 {
 }
 
-template< typename ReturnType, typename Combiner, typename... Args >
-CombiningEvent< ReturnType, Combiner, Args... >::~CombiningEvent()
+
+// ===========================================================================
+// operator() / trigger / emit
+// ===========================================================================
+
+template< typename Combiner, typename ReturnType, typename... Args >
+inline ReturnType CombiningEvent< Combiner, ReturnType, Args... >::operator()( Args... args )
 {
-	disconnectAll();
-}
+	// empty results vector serves as the "nothing to combine" base case for
+	// both the blocked path and the no-active-handlers path
+	std::vector< ReturnType > results;
 
-template< typename ReturnType, typename Combiner, typename... Args >
-ReturnType CombiningEvent< ReturnType, Combiner, Args... >::operator()( Args... args )
-{
-	// keep (wrapper*, impl_shared_ptr) pairs so impls stay alive during invocation
-	struct ConnectionHolder
+	if ( ! _impl->isBlocked() )
 	{
-		ConnectionWrapperBase* wrapper;
-		std::shared_ptr< ConnectionBase > impl;
-	};
+		platform::LockGuard< platform::Mutex > lock( _impl->mutex );
 
-	std::vector< ConnectionHolder > connections;
+		results.reserve( _impl->order.size() );
 
-	{
-		platform::LockGuard< platform::Mutex > lock( _mutex );
+		// single-shot handlers that fire this round are removed from
+		// _impl->order after the loop, not during it - order is what we are
+		// iterating right now, and mutating it mid-iteration would either
+		// invalidate the iteration or require fiddly index bookkeeping for
+		// no benefit, since nothing else touches order while mutex is held
+		std::vector< uint32_t > firedSingleShots;
 
-		// prune dead connections opportunistically
-		_connections.erase(
-			std::remove_if( _connections.begin(), _connections.end(),
-				[]( const std::unique_ptr< ConnectionWrapperBase >& wrapper ) {
-					return ! wrapper || ! wrapper->isConnected();
-				} ),
-			_connections.end() );
-
-		connections.reserve( _connections.size() );
-		for ( auto& conn : _connections )
+		for ( uint32_t index : _impl->order )
 		{
-			auto base = conn->getBase();
-			if ( base && base->isConnected() )
+			auto& entry = _impl->handlers[ index ];
+			if ( ! entry.flags.isActive() || entry.flags.isBlocked() )
 			{
-				connections.push_back( { conn.get(), base } );
+				continue;
+			}
+
+			const bool once = entry.flags.isSingleShot();
+
+			// args are intentionally not forwarded - multiple handlers
+			// read the same values
+			results.push_back( entry.handler( args... ) );
+
+			if ( once )
+			{
+				entry.flags.setActive( false );
+				entry.generation++;
+				{ HandlerType released = std::move( entry.handler ); }
+				if ( index < _impl->nextFree )
+				{
+					_impl->nextFree = index;
+				}
+				firedSingleShots.push_back( index );
 			}
 		}
-	}
-	// mutex released before invoking user code
 
-	std::vector< ReturnType > results;
-	results.reserve( connections.size() );
-
-	for ( auto& holder : connections )
-	{
-		if ( holder.impl && holder.impl->isConnected() )
+		if ( ! firedSingleShots.empty() )
 		{
-			// args are lvalues here - don't forward (multiple handlers read the same values)
-			auto result = holder.wrapper->invoke( args... );
-			if ( result.has_value() )
-			{
-				results.push_back( std::move( result.value() ) );
-			}
+			_impl->order.erase(
+				std::remove_if( _impl->order.begin(), _impl->order.end(),
+					[ &firedSingleShots ]( uint32_t idx ) {
+						return std::find( firedSingleShots.begin(), firedSingleShots.end(), idx )
+							!= firedSingleShots.end();
+					} ),
+				_impl->order.end() );
 		}
 	}
 
 	return _combiner( results.begin(), results.end() );
 }
 
-template< typename ReturnType, typename Combiner, typename... Args >
-ReturnType CombiningEvent< ReturnType, Combiner, Args... >::trigger( Args... args )
+template< typename Combiner, typename ReturnType, typename... Args >
+inline ReturnType CombiningEvent< Combiner, ReturnType, Args... >::trigger( Args... args )
 {
 	return operator()( std::forward< Args >( args )... );
 }
 
-template< typename ReturnType, typename Combiner, typename... Args >
-ReturnType CombiningEvent< ReturnType, Combiner, Args... >::emit( Args... args )
+template< typename Combiner, typename ReturnType, typename... Args >
+inline ReturnType CombiningEvent< Combiner, ReturnType, Args... >::emit( Args... args )
 {
 	return operator()( std::forward< Args >( args )... );
 }
 
-template< typename ReturnType, typename Combiner, typename... Args >
-template< typename HandlerFunc >
-Connection CombiningEvent< ReturnType, Combiner, Args... >::connect( std::shared_ptr< Object > receiver, HandlerFunc&& handler )
+
+// ===========================================================================
+// blocking
+// ===========================================================================
+
+template< typename Combiner, typename ReturnType, typename... Args >
+inline void CombiningEvent< Combiner, ReturnType, Args... >::block()
 {
-	return connectInternal( receiver, std::forward< HandlerFunc >( handler ), false );
+	_impl->block();
 }
 
-template< typename ReturnType, typename Combiner, typename... Args >
-template< typename ReceiverType, typename... HandlerArgs >
-Connection CombiningEvent< ReturnType, Combiner, Args... >::connect(
-	std::shared_ptr< ReceiverType > receiver,
-	ReturnType ( ReceiverType::*method )( HandlerArgs... ),
-	bool singleShot )
+template< typename Combiner, typename ReturnType, typename... Args >
+inline void CombiningEvent< Combiner, ReturnType, Args... >::unblock()
 {
-	static_assert( std::is_base_of< Object, ReceiverType >::value, "Receiver must derive from Object" );
-
-	// capture raw pointer to avoid circular reference;
-	// ConnectionImpl::invoke() checks receiver liveness before calling the lambda
-	ReceiverType* rawReceiver = receiver.get();
-
-	auto handler = [ rawReceiver, method ]( Args... args ) -> ReturnType {
-		return ( rawReceiver->*method )( args... );  // args are lvalues - don't forward
-	};
-
-	return connectInternal( receiver, std::move( handler ), singleShot );
+	_impl->unblock();
 }
 
-template< typename ReturnType, typename Combiner, typename... Args >
-template< typename HandlerFunc >
-Connection CombiningEvent< ReturnType, Combiner, Args... >::connectOnce( std::shared_ptr< Object > receiver, HandlerFunc&& handler )
+template< typename Combiner, typename ReturnType, typename... Args >
+inline BlockGuard CombiningEvent< Combiner, ReturnType, Args... >::blockGuard()
 {
-	return connectInternal( receiver, std::forward< HandlerFunc >( handler ), true );
+	_impl->block();
+	return BlockGuard(
+		_impl,
+		Callable< void() >::create< &CombiningEventImpl< ReturnType, Args... >::unblock >( _impl.get() ) );
 }
 
-template< typename ReturnType, typename Combiner, typename... Args >
-template< typename ReceiverType, typename... HandlerArgs >
-Connection CombiningEvent< ReturnType, Combiner, Args... >::connectOnce(
-	std::shared_ptr< ReceiverType > receiver,
-	ReturnType ( ReceiverType::*method )( HandlerArgs... ) )
-{
-	return connect( receiver, method, true );
-}
 
-template< typename ReturnType, typename Combiner, typename... Args >
-void CombiningEvent< ReturnType, Combiner, Args... >::disconnectAll()
-{
-	std::vector< std::unique_ptr< ConnectionWrapperBase > > connectionsToDisconnect;
+// ===========================================================================
+// object / method connections
+// ===========================================================================
 
+template< typename Combiner, typename ReturnType, typename... Args >
+template< auto Method, typename T >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connect( T& receiver )
+{
+	Trackable* tracker = nullptr;
+	if constexpr ( std::is_base_of_v< Trackable, T > )
 	{
-		platform::LockGuard< platform::Mutex > lock( _mutex );
-		connectionsToDisconnect = std::move( _connections );
-		_connections.clear();
+		tracker = static_cast< Trackable* >( &receiver );
 	}
+	return connectImpl(
+		HandlerType::template create< Method >( &receiver ),
+		tracker, false );
+}
 
-	// disconnect outside the mutex: disconnect() calls removeConnection() which
-	// tries to acquire the mutex, so we must not hold it here
-	for ( auto& conn : connectionsToDisconnect )
+template< typename Combiner, typename ReturnType, typename... Args >
+template< auto Method, typename T >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connect( Tracked< T > tracked )
+{
+	return connectImpl(
+		HandlerType::template create< Method >( &tracked.receiver ),
+		&tracked.tracker, false );
+}
+
+template< typename Combiner, typename ReturnType, typename... Args >
+template< typename T >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connect(
+	T& receiver,
+	ReturnType ( T::*method )( Args... ) )
+{
+	Trackable* tracker = nullptr;
+	if constexpr ( std::is_base_of_v< Trackable, T > )
 	{
-		if ( conn )
-		{
-			conn->disconnect();
-		}
+		tracker = static_cast< Trackable* >( &receiver );
 	}
-}
-
-template< typename ReturnType, typename Combiner, typename... Args >
-size_t CombiningEvent< ReturnType, Combiner, Args... >::connectionCount() const
-{
-	platform::LockGuard< platform::Mutex > lock( _mutex );
-	return _connections.size();
-}
-
-template< typename ReturnType, typename Combiner, typename... Args >
-template< typename HandlerFunc >
-Connection CombiningEvent< ReturnType, Combiner, Args... >::connectInternal(
-	std::shared_ptr< Object > receiver,
-	HandlerFunc&& handler,
-	bool singleShot )
-{
-	platform::LockGuard< platform::Mutex > lock( _mutex );
-
-	auto senderPtr = _senderObj ? _senderObj->shared_from_this() : std::shared_ptr< Object >();
-
-	auto connImpl = std::make_shared< ConnectionImpl< HandlerFunc > >(
-		this, senderPtr, receiver, std::forward< HandlerFunc >( handler ), singleShot );
-
-	auto wrapper = std::make_unique< ConnectionWrapper< HandlerFunc > >( connImpl );
-	_connections.push_back( std::move( wrapper ) );
-
-	if ( _senderObj )
-	{
-		_senderObj->registerConnection( connImpl );
-	}
-	receiver->registerConnection( connImpl );
-
-	return Connection( connImpl );
-}
-
-template< typename ReturnType, typename Combiner, typename... Args >
-void CombiningEvent< ReturnType, Combiner, Args... >::removeConnection( ConnectionBase* impl )
-{
-	platform::LockGuard< platform::Mutex > lock( _mutex );
-	_connections.erase(
-		std::remove_if( _connections.begin(), _connections.end(),
-			[ impl ]( const std::unique_ptr< ConnectionWrapperBase >& wrapper ) {
-				if( ! wrapper ) return true;
-				auto base = wrapper->getBase();
-				return ! base || base.get() == impl;
+	return connectImpl(
+		HandlerType::create(
+			[ &receiver, method ]( Args... a ) -> ReturnType {
+				return ( receiver.*method )( a... );
 			} ),
-		_connections.end() );
+		tracker, false );
 }
 
-
-//
-// CONNECTION IMPL
-//
-
-template< typename ReturnType, typename Combiner, typename... Args >
-template< typename HandlerFunc >
-CombiningEvent< ReturnType, Combiner, Args... >::ConnectionImpl< HandlerFunc >::ConnectionImpl(
-	CombiningEvent* event,
-	std::weak_ptr< Object > sender,
-	std::weak_ptr< Object > receiver,
-	HandlerFunc&& handler,
-	bool singleShot )
-	: _event( event )
-	, _sender( sender )
-	, _receiver( receiver )
-	, _handler( std::forward< HandlerFunc >( handler ) )
-	, _singleShot( singleShot )
+template< typename Combiner, typename ReturnType, typename... Args >
+template< typename T >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connect(
+	Tracked< T > tracked,
+	ReturnType ( T::*method )( Args... ) )
 {
+	return connectImpl(
+		HandlerType::create(
+			[ &r = tracked.receiver, method ]( Args... a ) -> ReturnType {
+				return ( r.*method )( a... );
+			} ),
+		&tracked.tracker, false );
 }
 
-template< typename ReturnType, typename Combiner, typename... Args >
-template< typename HandlerFunc >
-bool CombiningEvent< ReturnType, Combiner, Args... >::ConnectionImpl< HandlerFunc >::isConnected() const
+template< typename Combiner, typename ReturnType, typename... Args >
+template< auto Method, typename T >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connectOnce( T& receiver )
 {
-	return _connected;
-}
-
-template< typename ReturnType, typename Combiner, typename... Args >
-template< typename HandlerFunc >
-void CombiningEvent< ReturnType, Combiner, Args... >::ConnectionImpl< HandlerFunc >::disconnect()
-{
-	if ( _connected.exchange( false ) )
+	Trackable* tracker = nullptr;
+	if constexpr ( std::is_base_of_v< Trackable, T > )
 	{
-		if ( _event )
+		tracker = static_cast< Trackable* >( &receiver );
+	}
+	return connectImpl(
+		HandlerType::template create< Method >( &receiver ),
+		tracker, true );
+}
+
+template< typename Combiner, typename ReturnType, typename... Args >
+template< auto Method, typename T >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connectOnce( Tracked< T > tracked )
+{
+	return connectImpl(
+		HandlerType::template create< Method >( &tracked.receiver ),
+		&tracked.tracker, true );
+}
+
+template< typename Combiner, typename ReturnType, typename... Args >
+template< typename T >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connectOnce(
+	T& receiver,
+	ReturnType ( T::*method )( Args... ) )
+{
+	Trackable* tracker = nullptr;
+	if constexpr ( std::is_base_of_v< Trackable, T > )
+	{
+		tracker = static_cast< Trackable* >( &receiver );
+	}
+	return connectImpl(
+		HandlerType::create(
+			[ &receiver, method ]( Args... a ) -> ReturnType {
+				return ( receiver.*method )( a... );
+			} ),
+		tracker, true );
+}
+
+template< typename Combiner, typename ReturnType, typename... Args >
+template< typename T >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connectOnce(
+	Tracked< T > tracked,
+	ReturnType ( T::*method )( Args... ) )
+{
+	return connectImpl(
+		HandlerType::create(
+			[ &r = tracked.receiver, method ]( Args... a ) -> ReturnType {
+				return ( r.*method )( a... );
+			} ),
+		&tracked.tracker, true );
+}
+
+
+// ===========================================================================
+// free-function connections
+// ===========================================================================
+
+template< typename Combiner, typename ReturnType, typename... Args >
+template< ReturnType (*Func)( Args... ) >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connectFree()
+{
+	return connectImpl( HandlerType::template create< Func >(), nullptr, false );
+}
+
+template< typename Combiner, typename ReturnType, typename... Args >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connectFree( ReturnType (*func)( Args... ) )
+{
+	return connectImpl( HandlerType::create( func ), nullptr, false );
+}
+
+template< typename Combiner, typename ReturnType, typename... Args >
+template< ReturnType (*Func)( Args... ) >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connectOnceFree()
+{
+	return connectImpl( HandlerType::template create< Func >(), nullptr, true );
+}
+
+template< typename Combiner, typename ReturnType, typename... Args >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connectOnceFree( ReturnType (*func)( Args... ) )
+{
+	return connectImpl( HandlerType::create( func ), nullptr, true );
+}
+
+
+// ===========================================================================
+// lambda / Callable connections
+// ===========================================================================
+
+template< typename Combiner, typename ReturnType, typename... Args >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connectLambda( HandlerType&& handler )
+{
+	return connectImpl( std::move( handler ), nullptr, false );
+}
+
+template< typename Combiner, typename ReturnType, typename... Args >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connectLambda(
+	Trackable& tracker,
+	HandlerType&& handler )
+{
+	return connectImpl( std::move( handler ), &tracker, false );
+}
+
+template< typename Combiner, typename ReturnType, typename... Args >
+template< typename F, typename >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connectLambda( F&& functor )
+{
+	return connectImpl( HandlerType::create( std::forward< F >( functor ) ), nullptr, false );
+}
+
+template< typename Combiner, typename ReturnType, typename... Args >
+template< typename F >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connectLambda(
+	Trackable& tracker,
+	F&& functor )
+{
+	return connectImpl( HandlerType::create( std::forward< F >( functor ) ), &tracker, false );
+}
+
+template< typename Combiner, typename ReturnType, typename... Args >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connectOnceLambda( HandlerType&& handler )
+{
+	return connectImpl( std::move( handler ), nullptr, true );
+}
+
+template< typename Combiner, typename ReturnType, typename... Args >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connectOnceLambda(
+	Trackable& tracker,
+	HandlerType&& handler )
+{
+	return connectImpl( std::move( handler ), &tracker, true );
+}
+
+template< typename Combiner, typename ReturnType, typename... Args >
+template< typename F, typename >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connectOnceLambda( F&& functor )
+{
+	return connectImpl( HandlerType::create( std::forward< F >( functor ) ), nullptr, true );
+}
+
+template< typename Combiner, typename ReturnType, typename... Args >
+template< typename F >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connectOnceLambda(
+	Trackable& tracker,
+	F&& functor )
+{
+	return connectImpl( HandlerType::create( std::forward< F >( functor ) ), &tracker, true );
+}
+
+
+// ===========================================================================
+// disconnection
+// ===========================================================================
+
+template< typename Combiner, typename ReturnType, typename... Args >
+inline void CombiningEvent< Combiner, ReturnType, Args... >::disconnect( Trackable& tracker )
+{
+	auto connections = tracker.extractConnectionsTo( _impl.get() );
+	_impl->disconnectHandlers( connections );
+}
+
+template< typename Combiner, typename ReturnType, typename... Args >
+template< auto Method, typename T >
+inline void CombiningEvent< Combiner, ReturnType, Args... >::disconnect( T& receiver )
+{
+	const HandlerType target = HandlerType::template create< Method >( &receiver );
+
+	std::vector< GenData > toDisconnect;
+	{
+		platform::LockGuard< platform::Mutex > lock( _impl->mutex );
+		for ( uint32_t i = 0; i < static_cast< uint32_t >( _impl->handlers.size() ); ++i )
 		{
-			_event->removeConnection( this );
+			auto& entry = _impl->handlers[ i ];
+			if ( entry.flags.isActive() && entry.handler == target )
+			{
+				toDisconnect.emplace_back( i, entry.generation );
+			}
 		}
 	}
+	_impl->disconnectHandlers( toDisconnect );
 }
 
-template< typename ReturnType, typename Combiner, typename... Args >
-template< typename HandlerFunc >
-bool CombiningEvent< ReturnType, Combiner, Args... >::ConnectionImpl< HandlerFunc >::isBlocked() const
+template< typename Combiner, typename ReturnType, typename... Args >
+template< ReturnType (*Func)( Args... ) >
+inline void CombiningEvent< Combiner, ReturnType, Args... >::disconnectFree()
 {
-	return _blocked.load( std::memory_order_acquire );
-}
+	const HandlerType target = HandlerType::template create< Func >();
 
-template< typename ReturnType, typename Combiner, typename... Args >
-template< typename HandlerFunc >
-void CombiningEvent< ReturnType, Combiner, Args... >::ConnectionImpl< HandlerFunc >::block()
-{
-	_blocked.store( true, std::memory_order_release );
-}
-
-template< typename ReturnType, typename Combiner, typename... Args >
-template< typename HandlerFunc >
-void CombiningEvent< ReturnType, Combiner, Args... >::ConnectionImpl< HandlerFunc >::unblock()
-{
-	_blocked.store( false, std::memory_order_release );
-}
-
-template< typename ReturnType, typename Combiner, typename... Args >
-template< typename HandlerFunc >
-void CombiningEvent< ReturnType, Combiner, Args... >::ConnectionImpl< HandlerFunc >::beginMigration()
-{
-	// CombiningEvent does not support Deferred connections, so nothing to migrate
-}
-
-template< typename ReturnType, typename Combiner, typename... Args >
-template< typename HandlerFunc >
-void CombiningEvent< ReturnType, Combiner, Args... >::ConnectionImpl< HandlerFunc >::updateEventLoop( EventLoop* )
-{
-	// CombiningEvent does not support Deferred connections, so nothing to migrate
-}
-
-template< typename ReturnType, typename Combiner, typename... Args >
-template< typename HandlerFunc >
-std::optional< ReturnType > CombiningEvent< ReturnType, Combiner, Args... >::ConnectionImpl< HandlerFunc >::invoke( Args... args )
-{
-	if ( ! _connected || _blocked.load( std::memory_order_acquire ) )
+	std::vector< GenData > toDisconnect;
 	{
-		return std::nullopt;
+		platform::LockGuard< platform::Mutex > lock( _impl->mutex );
+		for ( uint32_t i = 0; i < static_cast< uint32_t >( _impl->handlers.size() ); ++i )
+		{
+			auto& entry = _impl->handlers[ i ];
+			if ( entry.flags.isActive() && entry.handler == target )
+			{
+				toDisconnect.emplace_back( i, entry.generation );
+			}
+		}
+	}
+	_impl->disconnectHandlers( toDisconnect );
+}
+
+template< typename Combiner, typename ReturnType, typename... Args >
+inline void CombiningEvent< Combiner, ReturnType, Args... >::disconnectFree(
+	ReturnType (*func)( Args... ) )
+{
+	const HandlerType target = HandlerType::create( func );
+
+	std::vector< GenData > toDisconnect;
+	{
+		platform::LockGuard< platform::Mutex > lock( _impl->mutex );
+		for ( uint32_t i = 0; i < static_cast< uint32_t >( _impl->handlers.size() ); ++i )
+		{
+			auto& entry = _impl->handlers[ i ];
+			if ( entry.flags.isActive() && entry.handler == target )
+			{
+				toDisconnect.emplace_back( i, entry.generation );
+			}
+		}
+	}
+	_impl->disconnectHandlers( toDisconnect );
+}
+
+template< typename Combiner, typename ReturnType, typename... Args >
+inline void CombiningEvent< Combiner, ReturnType, Args... >::disconnectAll()
+{
+	platform::LockGuard< platform::Mutex > lock( _impl->mutex );
+	_impl->preLockDisconnectAll();
+}
+
+
+// ===========================================================================
+// inspection
+// ===========================================================================
+
+template< typename Combiner, typename ReturnType, typename... Args >
+inline std::size_t
+CombiningEvent< Combiner, ReturnType, Args... >::slotCount() const
+{
+	platform::LockGuard< platform::Mutex > lock( _impl->mutex );
+	return _impl->handlers.size();
+}
+
+
+// ===========================================================================
+// connectImpl
+// ===========================================================================
+
+template< typename Combiner, typename ReturnType, typename... Args >
+inline Connection CombiningEvent< Combiner, ReturnType, Args... >::connectImpl(
+	HandlerType&& handler,
+	Trackable* tracker,
+	bool singleShot )
+{
+	uint32_t index;
+	uint16_t gen;
+	const uint64_t tag = tracker ? tracker->migrationTag() : 0;
+
+	{
+		platform::LockGuard< platform::Mutex > lock( _impl->mutex );
+
+		if ( _impl->nextFree < _impl->handlers.size() )
+		{
+			index = _impl->nextFree;
+			gen = _impl->handlers[ index ].generation;
+			_impl->handlers[ index ].init( std::move( handler ), tag, singleShot );
+			_impl->order.push_back( index );
+
+			uint32_t next = static_cast< uint32_t >( _impl->handlers.size() );
+			for ( uint32_t i = index + 1; i < static_cast< uint32_t >( _impl->handlers.size() ); ++i )
+			{
+				if ( ! _impl->handlers[ i ].flags.isActive() )
+				{
+					next = i;
+					break;
+				}
+			}
+			_impl->nextFree = next;
+		}
+		else
+		{
+			index = static_cast< uint32_t >( _impl->handlers.size() );
+			gen = 0;
+
+			typename Impl::EntryType entry;
+			entry.init( std::move( handler ), tag, singleShot );
+			_impl->handlers.push_back( std::move( entry ) );
+			_impl->order.push_back( index );
+			_impl->nextFree = static_cast< uint32_t >( _impl->handlers.size() );
+		}
 	}
 
-	auto rec = _receiver.lock();
-	if ( ! rec )
+	platform::WeakPtr< EventImplBase > weak( _impl );
+	if ( tracker )
 	{
-		// receiver has been destroyed - disconnect and skip
-		disconnect();
-		return std::nullopt;
+		tracker->trackConnection( weak, index, gen );
 	}
 
-	ReturnType result = _handler( std::forward< Args >( args )... );
-
-	if ( _singleShot )
-	{
-		disconnect();
-	}
-
-	return result;
+	return Connection( std::move( weak ), index, gen );
 }
 
 
-//
-// CONNECTION WRAPPER
-//
+// ===========================================================================
+// aliases
+// ===========================================================================
 
-template< typename ReturnType, typename Combiner, typename... Args >
-template< typename HandlerFunc >
-CombiningEvent< ReturnType, Combiner, Args... >::ConnectionWrapper< HandlerFunc >::ConnectionWrapper(
-	std::shared_ptr< ConnectionImpl< HandlerFunc > > impl )
-	: _impl( impl )
-{
-}
-
-template< typename ReturnType, typename Combiner, typename... Args >
-template< typename HandlerFunc >
-std::shared_ptr< ConnectionBase > CombiningEvent< ReturnType, Combiner, Args... >::ConnectionWrapper< HandlerFunc >::getBase()
-{
-	return _impl;
-}
-
-template< typename ReturnType, typename Combiner, typename... Args >
-template< typename HandlerFunc >
-bool CombiningEvent< ReturnType, Combiner, Args... >::ConnectionWrapper< HandlerFunc >::isConnected() const
-{
-	return _impl && _impl->isConnected();
-}
-
-template< typename ReturnType, typename Combiner, typename... Args >
-template< typename HandlerFunc >
-std::optional< ReturnType > CombiningEvent< ReturnType, Combiner, Args... >::ConnectionWrapper< HandlerFunc >::invoke( Args... args )
-{
-	if ( _impl )
-	{
-		return _impl->invoke( std::forward< Args >( args )... );
-	}
-	return std::nullopt;
-}
-
-template< typename ReturnType, typename Combiner, typename... Args >
-template< typename HandlerFunc >
-void CombiningEvent< ReturnType, Combiner, Args... >::ConnectionWrapper< HandlerFunc >::disconnect()
-{
-	if ( _impl )
-	{
-		_impl->disconnect();
-	}
-}
+/** @brief Alias for users that prefer signal/emit terminology. */
+template< typename Combiner, typename ReturnType, typename... Args >
+using CombiningSignal = CombiningEvent< Combiner, ReturnType, Args... >;
 
 } // namespace pulsar
 } // namespace kmac

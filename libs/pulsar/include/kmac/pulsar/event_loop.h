@@ -1,570 +1,432 @@
+#pragma once
 #ifndef KMAC_PULSAR_EVENT_LOOP_H
 #define KMAC_PULSAR_EVENT_LOOP_H
 
 /**
  * @file event_loop.h
- * @brief Thread-safe event queue with self-managed and externally-managed modes.
+ * @brief Manually-drained task queue for Deferred connection dispatch.
  *
- * EventLoop is the backbone of Pulsar's cross-thread dispatch.  When a Deferred
- * connection fires, the handler invocation is packaged as a CallableBase and
- * posted to the receiver's EventLoop.  The loop then executes it on whatever
- * thread drains the queue.
+ * @section task Task type
  *
- * Two operating modes are available via the static factory methods:
+ * Tasks are Callable<void()>.  post() takes ownership via move.
  *
- * - **makeAutoProcessed()**:
- *   spawns a dedicated background thread; call start() / stop() to control it
+ * @section vectors Queue and drain vectors
  *
- * - **makeManualProcessed()**:
- *   no background thread; the owner is responsible for calling processEvents() regularly
+ * Two vectors are maintained:
+ *  - _pending: tasks waiting to be drained, protected by _pendingMutex
+ *  - _active:  tasks currently being processed by drain(); only one thread
+ *              can drain this vector at a time
  *
- * In both modes, postEvent() is safe to call from any thread.
+ * drain() swaps _pending into _active under a brief lock, then processes
+ * _active without holding any lock.  Both vectors retain their allocated
+ * capacity across calls by default; construct with retainCapacity = false
+ * to release _active after each batch instead.
+ *
+ * @section migration Task migration
+ *
+ * migratePendingTo( dest, tag ) moves all entries in _pending whose tag
+ * matches the given value into dest._pending, preserving their relative
+ * order.  Entries in _active (already being drained) are left untouched.
+ * This is how Trackable::setEventLoop() transfers in-flight deferred tasks
+ * to a new loop without disrupting any work already underway.
+ *
+ * Every connection where a given Trackable is the receiver shares that
+ * Trackable's single migration tag (see Trackable::migrationTag()), so one
+ * migratePendingTo() call moves all of a receiver's pending tasks together
+ * in one pass, regardless of which event or connection produced each one -
+ * there is no need to collect or pass more than one tag per receiver.
+ *
+ * If any tasks are migrated, dest's post-notification hook (if attached,
+ * e.g. via AutoDrainThread) is invoked afterward, the same as post() does -
+ * so a destination loop with a waiting drain thread wakes up to process the
+ * migrated tasks rather than leaving them pending until something else
+ * happens to post() or drain() that loop.
+ *
+ * No ordering guarantees are made across multiple migration calls: each call
+ * appends its extracted tasks to dest._pending after whatever was already
+ * there, so the arrival order in the destination reflects the sequence of
+ * migration calls rather than the original posting order.
+ *
+ * @section drain Drain semantics
+ *
+ * Any thread may call drain().  Concurrent calls are short-circuited via
+ * atomic compare-exchange.  Tasks posted during drain() are processed before
+ * drain() completes, although there is a short window during which drain()
+ * is wrapping up and new tasks can be posted without being handled.
+ *
+ * @section drain_thread Drain thread
+ *
+ * An optional registered drain thread ID supports sender-affinity queries.
+ * Set via setDrainThread(), callable from any thread.
  */
 
-#include "pulsar_fwd.h"
-#include "config.h"
+#include "platform.h"
 
+#include "callable.h"
+
+#include <algorithm>
 #include <atomic>
-#include <memory>
-#include <queue>
+#include <mutex>
+#include <thread>
 #include <vector>
-
-// std::thread and std::condition_variable are only needed in self-managed
-// (auto-processed) mode.  Define PULSAR_ENABLE_THREAD=0 to exclude them,
-// which allows compilation on targets where <thread> is unavailable
-// (bare-metal, some embedded toolchains).  makeAutoProcessed() is then
-// disabled via static_assert.
-#ifndef PULSAR_ENABLE_THREAD
-#	define PULSAR_ENABLE_THREAD 1
-#endif
-
-#if PULSAR_ENABLE_THREAD
-#	include <condition_variable>
-#	include <thread>
-#endif
 
 namespace kmac {
 namespace pulsar {
 
-// ============================================================================
-// CallableBase / CallableWrapper
-// ============================================================================
-
-/**
- * @brief Abstract unit of work stored in an EventLoop queue.
- *
- * Each deferred handler invocation is wrapped in a CallableWrapper<Func> that
- * derives from this class.  EventLoop stores and invokes them through this
- * interface, keeping the queue type-erased.
- */
-class CallableBase
-{
-public:
-	virtual ~CallableBase() = default;
-
-	/**
-	 * @brief Returns the Object that will receive this callable, or nullptr for
-	 * free-function callables.
-	 *
-	 * Used by Object::setEventLoop() to extract pending callables that belong to
-	 * a specific receiver during loop migration.
-	 */
-	virtual Object* getReceiver() const;
-
-	/**
-	 * @brief Execute the stored callable.
-	 */
-	virtual void invoke() = 0;
-};
-
-/**
- * @brief Concrete callable wrapper that stores a functor and its receiver.
- *
- * @tparam Func any callable type compatible with void()
- */
-template< typename Func >
-class CallableWrapper : public CallableBase
-{
-private:
-	Func _func;
-	Object* _receiver;  ///< raw pointer - only used for identity comparison during migration
-
-public:
-	/**
-	 * @param func callable to invoke, moved/forwarded into storage
-	 * @param receiver Object that owns this handler (nullptr for free functions)
-	 */
-	CallableWrapper( Func&& func, Object* receiver = nullptr );
-
-	Object* getReceiver() const override;
-
-	void invoke() override;
-};
-
-// ============================================================================
-// EventLoop
-// ============================================================================
-
-/**
- * @brief Thread-safe event queue with two operating modes.
- *
- * **Self-managed mode** (created via makeAutoProcessed()):
- *   A dedicated background thread is spawned when start() is called.  It
- *   blocks on an internal condition variable and drains the queue as events
- *   arrive.  Call stop() to shut it down and join the thread.  Use this for
- *   worker objects that should live permanently on their own thread.
- *
- * **Externally-managed mode** (created via makeManualProcessed()):
- *   No background thread is created.  postEvent() pushes to the queue but
- *   does not notify any condition variable.  The owner is responsible for
- *   calling processEvents() at appropriate points (e.g. every frame, after a
- *   platform event pump yields, etc.).  Use this for (e.g.) the main thread,
- *   UI thread, render thread, or any existing thread that already has its own
- *   scheduling loop.
- *
- * In both modes the queue is fully thread-safe: postEvent() may be called from
- * any thread at any time.  processEvents() should only be called from the
- * owning thread in external mode; in self-managed mode it is called internally
- * and should not be called from user code while the loop is running.
- *
- * **Auto connection resolution** uses EventLoop pointer identity: two objects
- * are considered "on the same loop" if and only if their eventLoop() pointers
- * are equal and non-null.
- *
- * @note EventLoop is move-constructible but not copyable or move-assignable.
- * Moving is only safe before start() is called.
- *
- * @code
- * // self-managed (dedicated thread)
- * auto loop = EventLoop::makeAutoProcessed();
- * loop.start();
- * receiver->setEventLoop( &loop );
- * // ... work ...
- * loop.stop();
- *
- * // externally-managed (caller drives processing)
- * auto loop = EventLoop::makeManualProcessed();
- * receiver->setEventLoop( &loop );
- * while ( running ) {
- *     loop.processEvents();
- *     // ... other per-frame work ...
- * }
- * @endcode
- */
 class EventLoop
 {
-public:
-#if PULSAR_ENABLE_THREAD
-	/**
-	 * @brief Create an EventLoop that manages its own background thread that
-	 * handles draining the queue.
-	 *
-	 * Call start() to begin processing and stop() to shut down.
-	 * Use this for worker objects that should live on a dedicated thread.
-	 *
-	 * @note Only available when PULSAR_ENABLE_THREAD is set (the default).
-	 */
-	static EventLoop makeAutoProcessed();
-#endif // PULSAR_ENABLE_THREAD
+	friend class AutoDrainThread;
 
-	/**
-	 * @brief Create an EventLoop driven by the caller.
-	 *
-	 * No background thread is spawned.  Call processEvents() from your
-	 * owning thread whenever you want to drain deferred events - e.g. once
-	 * per frame, after a platform event pump yields, etc.
-	 *
-	 * Use this for (e.g.) the main thread, UI thread, render thread, or any
-	 * existing thread that already has its own scheduling loop.
-	 */
-	static EventLoop makeManualProcessed();
+public:
+	using Task = Callable< void() >;
 
 private:
-	std::queue< std::unique_ptr< CallableBase > > _eventQueue;
-	platform::Mutex _queueMutex;
+	/**
+	 * @brief A queued task with an optional owner ID for migration.
+	 * The ID matches EventImplBase::_id of the owning event.
+	 */
+	struct QueueEntry
+	{
+		Task task;
+		uint64_t tag = 0;
+	};
 
-#if PULSAR_ENABLE_THREAD
-	const bool _selfManaged;         ///< true for auto-processed mode
-	std::atomic< bool > _running;
-	std::thread _thread;
-	std::condition_variable _cv;
-#endif
+	mutable platform::Mutex _pendingMutex;  ///< guards _pending only; _active is lock-free (see class docs)
+	std::vector< QueueEntry > _pending;     ///< tasks waiting to be drained
+	std::vector< QueueEntry > _active;      ///< tasks currently being drained
 
-	explicit EventLoop( bool selfManaged );
+	platform::Atomic< bool > _isDraining { false };
+
+	/**
+	 * @brief The thread currently executing drain() for this loop, if any.
+	 *
+	 * Distinct from _drainThread/_hasDrainThread below: this tracks live
+	 * drain state rather than a persistent registration, and needs no
+	 * setup call - it's written by drain() itself.  Reset to the
+	 * default-constructed ThreadId{} sentinel before _isDraining is
+	 * cleared, so that whichever thread next wins the _isDraining CAS is
+	 * guaranteed to see the sentinel (never a *different* thread's stale
+	 * id) during the brief window before it writes its own id here - a
+	 * reader can therefore only ever get a false negative, never a false
+	 * positive.
+	 */
+	platform::Atomic< platform::ThreadId > _activeDrainThreadId { platform::ThreadId{} };
+
+	/**
+	 * @brief Atomic because drainThread() may be read from any thread
+	 * concurrently with setDrainThread().  Relaxed ordering is sufficient;
+	 * the ThreadId value should be set once at setup, well before drain calls.
+	 */
+	platform::Atomic< platform::ThreadId > _drainThread {};
+	platform::Atomic< bool > _hasDrainThread { false };
+
+	/**
+	 * @brief Called at the end of post() to wake a waiting drain thread.
+	 * Null when no AutoDrainThread is attached.  Only AutoDrainThread may
+	 * set or clear this via the private accessors below.
+	 */
+	Callable< void() > _postNotify;
+
+	bool _retainCapacity;  ///< whether drain should maintain storage or reset to default-constructed lists
 
 public:
 	/**
-	 * @brief Move constructor, only safe to call before start().
+	 * @brief Construct an EventLoop.
+	 *
+	 * @param retainCapacity true (default) to indicate that both vectors should
+	 *   retain their capacity between drains, false to indicate that the _active
+	 *   queue is deallocated (reassigned to a default constructed vector) at the
+	 *   end of each drain
 	 */
-	EventLoop( EventLoop&& other ) noexcept;
+	explicit EventLoop( bool retainCapacity = true ) noexcept;
+
+	~EventLoop() = default;
 
 	EventLoop( const EventLoop& ) = delete;
 	EventLoop& operator=( const EventLoop& ) = delete;
+	EventLoop( EventLoop&& ) = delete;
 	EventLoop& operator=( EventLoop&& ) = delete;
 
-	/**
-	 * @brief Destructor, calls stop() automatically in self-managed mode.
-	 */
-	~EventLoop();
-
-#if PULSAR_ENABLE_THREAD
-	// -------------------------------------------------------------------------
-	// Self-managed mode API (requires PULSAR_ENABLE_THREAD)
 	// -------------------------------------------------------------------------
 
 	/**
-	 * @brief Spawn the background thread and begin draining the queue.
-	 *
-	 * Only valid in self-managed mode (makeAutoProcessed()).  Calling start()
-	 * on an already-running loop is a no-op.
+	 * @brief True while any thread is inside a drain() call for this loop.
 	 */
-	void start();
+	bool isDraining() const noexcept;
 
 	/**
-	 * @brief Signal the background thread to stop and join it.
+	 * @brief Returns true if `id` is, right now, the thread executing
+	 * this loop's drain() call.
 	 *
-	 * Only valid in self-managed mode.  Blocks until the thread exits.
-	 * Calling stop() when not running is a no-op.
+	 * Requires no setup - unlike hasDrainThread()/drainThread() below,
+	 * which track a persistent registration, this answers "is drain()
+	 * for this loop active on this exact thread at this exact moment".
 	 */
-	void stop();
+	bool isDrainingOnThread( platform::ThreadId id ) const noexcept;
 
 	/**
-	 * @brief Returns true if this loop was created in self-managed mode.
+	 * @brief True if a thread has been registered via setDrainThread() and
+	 * not yet cleared via clearDrainThread().
 	 */
-	bool isManagedInternally() const;
-#endif // PULSAR_ENABLE_THREAD
-
-	// -------------------------------------------------------------------------
-	// Shared API
-	// -------------------------------------------------------------------------
+	bool hasDrainThread() const noexcept;
 
 	/**
-	 * @brief Post a callable to the queue from any thread.
-	 *
-	 * In self-managed mode, the background thread is notified via the internal
-	 * condition variable.  In external mode, the task is deferred silently;
-	 * the owner must call processEvents() to drain it.
-	 *
-	 * @param task callable to execute on the loop's thread
-	 * @param receiver Object that owns this task (used during loop migration)
+	 * @brief The registered drain thread ID.  Meaningless if
+	 * hasDrainThread() is false (returns a default-constructed ThreadId{}
+	 * in that case, not a sentinel to check against directly - check
+	 * hasDrainThread() first).
 	 */
-	template< typename Func >
-	void postEvent( Func&& task, Object* receiver = nullptr );
+	platform::ThreadId drainThread() const noexcept;
 
 	/**
-	 * @brief Drain all currently deferred tasks on the calling thread.
+	 * @brief Register a thread as the designated drain thread.
 	 *
-	 * Swaps the internal queue to a local queue under the lock, then executes
-	 * all pending callables outside the lock.  New events posted while
-	 * executing will be processed on the next call.
-	 *
-	 * In external mode: call this regularly from your owning thread.
-	 * In self-managed mode: safe to call when the loop is not running (e.g.
-	 * before start() or after stop()), but do not call it while the background
-	 * thread is active.
+	 * May be called from any thread at any time.
 	 */
-	void processEvents();
-
-	// -------------------------------------------------------------------------
-	// Event migration (used internally by Object::setEventLoop)
-	// -------------------------------------------------------------------------
+	void setDrainThread( platform::ThreadId id ) noexcept;
 
 	/**
-	 * @brief Remove and return all deferred events belonging to @p receiver.
+	 * @brief Clear the drain thread registration.
 	 *
-	 * Called by Object::setEventLoop() during loop migration to transfer
-	 * pending tasks from the old loop to the new one.  All remaining events
-	 * (belonging to other receivers) stay in the queue.
-	 *
-	 * @param receiver the Object whose tasks should be extracted
-	 * @return vector of extracted tasks in original queue order
+	 * After this call hasDrainThread() returns false and operator() on any
+	 * event with this loop as its sender loop will fire synchronously again.
 	 */
-	std::vector< std::unique_ptr< CallableBase > > extractEventsFor( Object* receiver );
+	void clearDrainThread() noexcept;
 
 	/**
-	 * @brief Append a batch of pre-built tasks to the queue.
+	 * @brief Returns true if events with this loop as their sender loop
+	 * should dispatch directly (synchronously) for the given thread,
+	 * rather than being deferred.
 	 *
-	 * Used by Object::setEventLoop() to insert migrated tasks into the new
-	 * loop.  In self-managed mode the background thread is notified if any
-	 * tasks were appended.
-	 *
-	 * @param tasks tasks to append; nullptrs in the vector are skipped
+	 * True if @p id has either been registered via setDrainThread() (a
+	 * thread that has promised to service this loop may always dispatch
+	 * directly - queuing then immediately draining on the same thread has
+	 * no observable difference), or is, right now, actively executing this
+	 * loop's drain() call (so a reentrant trigger during that very drain
+	 * dispatches directly instead of taking an unnecessary queue round-trip).
 	 */
-	void appendEvents( std::vector< std::unique_ptr< CallableBase > > tasks );
+	bool shouldDispatchDirectlyOnThread( platform::ThreadId id ) const noexcept;
+
+	/**
+	 * @brief Enqueue a task.  Thread-safe; takes ownership.
+	 *
+	 * @param task the task to enqueue
+	 * @param tag the receiver's migration tag (Trackable::migrationTag()),
+	 *   used by migratePendingTo() to find all of a receiver's pending
+	 *   tasks in one pass; pass 0 (default) for untagged tasks
+	 */
+	void post( Task task, uint64_t tag = 0 );
+
+	/**
+	 * @brief Process all queued tasks in FIFO order.
+	 *
+	 * If a drain is already in progress this call returns immediately.
+	 * Tasks are processed until both the _active and _pending lists are
+	 * empty, so tasks posted during drain() are processed.
+	 *
+	 * Safe to call from any thread.
+	 */
+	void drain();
+
+	/**
+	 * @brief Move all pending tasks tagged with `tag` to dest, preserving
+	 * their relative order.
+	 *
+	 * @note Untracked tasks, i.e. those with tag == 0, are not migrated - 0
+	 * is reserved as the "no particular receiver" sentinel (see
+	 * Trackable::migrationTag()), so a call with tag == 0 is always a no-op
+	 * rather than matching every untagged task in _pending.
+	 *
+	 * If any tasks are migrated, dest's post-notification hook (if attached)
+	 * is invoked afterward - the same as post() does - so a destination loop
+	 * with a waiting drain thread wakes to process them immediately.
+	 *
+	 * Every connection where a given Trackable is the receiver shares that
+	 * Trackable's single migration tag, so one call here moves all of a
+	 * receiver's pending tasks together, regardless of which event or
+	 * connection produced each one - see Trackable::setEventLoop().
+	 */
+	void migratePendingTo( EventLoop* dest, uint64_t tag );
 
 private:
 	/**
-	 * @brief Execute all tasks in @p queue sequentially.  Called without holding any lock.
+	 * @brief Installs the hook post() calls after enqueueing, to wake a
+	 * waiting drain thread.  Only AutoDrainThread calls this.
 	 */
-	void executeEvents( std::queue< std::unique_ptr< CallableBase > >& queue );
+	void setPostNotify( Callable< void() > notify );
 
-#if PULSAR_ENABLE_THREAD
 	/**
-	 * @brief Background thread entry point (self-managed mode only).
+	 * @brief Removes the hook installed by setPostNotify(), restoring the
+	 * no-drain-thread-attached behaviour.
 	 */
-	void run();
-#endif
+	void clearPostNotify();
 };
 
+// ---------------------------------------------------------------------------
 
-// ============================================================================
-// Drain context tracking
-// ============================================================================
-
-/**
- * @brief Pointer to the EventLoop currently draining on this thread.
- *
- * Set to the loop's address for the duration of executeEvents() and cleared
- * (restored) on exit.  Event::operator() compares the sender's associated
- * loop against this value to decide whether to emit directly or defer:
- *
- * - nullptr or a different loop pointer -> defer to sender's loop
- * - same pointer as sender's loop       -> emit directly (already in context)
- *
- * thread_local gives each thread its own independent value, so two loops
- * draining simultaneously on different threads never interfere.
- */
-inline thread_local EventLoop* tls_drainingLoop = nullptr;
-
-//
-// IMPLEMENTATION
-//
-
-Object* CallableBase::getReceiver() const
-{
-	return nullptr;
-}
-
-template< typename Func >
-CallableWrapper< Func >::CallableWrapper( Func&& func, Object* receiver )
-	: _func( std::forward< Func >( func ) )
-	, _receiver( receiver )
+inline EventLoop::EventLoop( bool retainCapacity ) noexcept
+	: _retainCapacity( retainCapacity )
 {
 }
 
-template< typename Func >
-void CallableWrapper< Func >::invoke()
+inline bool EventLoop::isDraining() const noexcept
 {
-	_func();
+	return _isDraining.load( std::memory_order_relaxed );
 }
 
-template< typename Func >
-Object* CallableWrapper< Func >::getReceiver() const
+inline bool EventLoop::isDrainingOnThread( platform::ThreadId id ) const noexcept
 {
-	return _receiver;
+	return _isDraining.load( std::memory_order_acquire )
+		&& _activeDrainThreadId.load( std::memory_order_relaxed ) == id;
 }
 
-
-//
-// EVENT LOOP
-//
-
-#if PULSAR_ENABLE_THREAD
-EventLoop EventLoop::makeAutoProcessed()
+inline bool EventLoop::hasDrainThread() const noexcept
 {
-	return EventLoop( true );
-}
-#endif // PULSAR_ENABLE_THREAD
-
-EventLoop EventLoop::makeManualProcessed()
-{
-	return EventLoop( false );
+	return _hasDrainThread.load( std::memory_order_acquire );
 }
 
-#if PULSAR_ENABLE_THREAD
-EventLoop::EventLoop( bool selfManaged )
-	: _selfManaged( selfManaged )
-	, _running( false )
+inline platform::ThreadId EventLoop::drainThread() const noexcept
 {
+	return _drainThread.load( std::memory_order_relaxed );
 }
 
-EventLoop::EventLoop( EventLoop&& other ) noexcept
-	: _selfManaged( other._selfManaged )
-	, _running( false )
+inline void EventLoop::setDrainThread( platform::ThreadId id ) noexcept
 {
-	// other must not be running - moving a live loop is undefined
+	_drainThread.store( id, std::memory_order_relaxed );
+	_hasDrainThread.store( true, std::memory_order_release );
 }
 
-EventLoop::~EventLoop()
+inline void EventLoop::clearDrainThread() noexcept
 {
-	if ( _selfManaged )
+	_hasDrainThread.store( false, std::memory_order_release );
+}
+
+inline bool EventLoop::shouldDispatchDirectlyOnThread( platform::ThreadId id ) const noexcept
+{
+	return ( hasDrainThread() && drainThread() == id ) || isDrainingOnThread( id );
+}
+
+inline void EventLoop::post( Task task, uint64_t tag )
+{
 	{
-		stop();
+		std::lock_guard< platform::Mutex > lock( _pendingMutex );
+		_pending.push_back( { std::move( task ), tag } );
+	}
+
+	// notify outside the lock (if notify call is valid), so the drain
+	// thread wakes without contending on _pendingMutex
+	if ( _postNotify )
+	{
+		_postNotify();
 	}
 }
-#else
-EventLoop::EventLoop( bool )
-{
-}
 
-EventLoop::EventLoop( EventLoop&& ) noexcept
+inline void EventLoop::drain()
 {
-}
-
-EventLoop::~EventLoop()
-{
-}
-#endif // PULSAR_ENABLE_THREAD
-
-#if PULSAR_ENABLE_THREAD
-void EventLoop::start()
-{
-	if ( ! _selfManaged )
+	bool expected = false;
+	if ( ! _isDraining.compare_exchange_strong(
+		expected, true, std::memory_order_acquire, std::memory_order_relaxed ) )
 	{
 		return;
 	}
 
-	if ( ! _running.exchange( true ) )
-	{
-		_thread = std::thread( &EventLoop::run, this );
-	}
-}
+	// safe: only the thread that just won the CAS above reaches this line,
+	// so there is no concurrent writer to race against
+	_activeDrainThreadId.store( platform::currentThreadId(), std::memory_order_release );
 
-void EventLoop::stop()
-{
-	if ( ! _selfManaged )
+	while ( true )
 	{
-		return;
-	}
-
-	if ( _running.exchange( false ) )
-	{
-		_cv.notify_one();
-		if ( _thread.joinable() )
+		bool hasWork;
 		{
-			_thread.join();
+			std::lock_guard< platform::Mutex > lock( _pendingMutex );
+			hasWork = ! _pending.empty();
+			if ( hasWork )
+			{
+				std::swap( _pending, _active );
+			}
 		}
-	}
-}
 
-bool EventLoop::isManagedInternally() const
-{
-	return _selfManaged;
-}
-#endif // PULSAR_ENABLE_THREAD
-
-template< typename Func >
-void EventLoop::postEvent( Func&& task, Object* receiver )
-{
-	{
-		platform::LockGuard< platform::Mutex > lock( _queueMutex );
-		_eventQueue.push( std::make_unique< CallableWrapper< Func > >( std::forward< Func >( task ), receiver ) );
-	}
-
-#if PULSAR_ENABLE_THREAD
-	if ( _selfManaged )
-	{
-		_cv.notify_one();
-	}
-#endif
-}
-
-void EventLoop::processEvents()
-{
-	std::queue< std::unique_ptr< CallableBase > > localQueue;
-	{
-		platform::LockGuard< platform::Mutex > lock( _queueMutex );
-		localQueue = std::move( _eventQueue );
-	}
-
-	executeEvents( localQueue );
-}
-
-std::vector< std::unique_ptr< CallableBase > > EventLoop::extractEventsFor( Object* receiver )
-{
-	std::vector< std::unique_ptr< CallableBase > > extracted;
-	std::queue< std::unique_ptr< CallableBase > > remaining;
-
-	platform::LockGuard< platform::Mutex > lock( _queueMutex );
-
-	while ( ! _eventQueue.empty() )
-	{
-		auto& task = _eventQueue.front();
-		if ( task && task->getReceiver() == receiver )
+		// exit the loop if there's no more work
+		if ( ! hasWork )
 		{
-			extracted.push_back( std::move( task ) );
+			break;
 		}
+
+		// process all active tasks
+		for ( auto& entry : _active )
+		{
+			entry.task();
+		}
+
+		// clear the list if capacity should be retained
+		if ( _retainCapacity )
+		{
+			_active.clear();
+		}
+		// otherwise, reset the list (i.e. default construct a new list)
 		else
 		{
-			remaining.push( std::move( task ) );
+			_active = std::vector< QueueEntry >{};
 		}
-		_eventQueue.pop();
 	}
 
-	_eventQueue = std::move( remaining );
-	return extracted;
+	// reset before releasing _isDraining, so the sentinel-only invariant
+	// holds for whichever thread wins the CAS next
+	_activeDrainThreadId.store( platform::ThreadId{}, std::memory_order_release );
+	_isDraining.store( false, std::memory_order_release );
 }
 
-void EventLoop::appendEvents( std::vector< std::unique_ptr< CallableBase > > tasks )
+inline void EventLoop::migratePendingTo( EventLoop* dest, uint64_t tag )
 {
+	// terminate early if the destination loop is invalid or if it's this loop;
+	// tag == 0 is the "untagged" sentinel and is never migrated
+	if ( ! dest || dest == this || tag == 0 )
 	{
-		platform::LockGuard< platform::Mutex > lock( _queueMutex );
-		for ( auto& task : tasks )
-		{
-			if ( task )
-			{
-				_eventQueue.push( std::move( task ) );
-			}
-		}
+		return;
 	}
 
-#if PULSAR_ENABLE_THREAD
-	if ( _selfManaged && ! tasks.empty() )
+	bool migratedAny = false;
 	{
-		_cv.notify_one();
+		platform::UniqueLock< platform::Mutex > lockSrc( _pendingMutex, std::defer_lock );
+		platform::UniqueLock< platform::Mutex > lockDst( dest->_pendingMutex, std::defer_lock );
+		std::lock( lockSrc, lockDst );
+
+		// single pass over _pending: match this tag, preserving the
+		// relative order of all the receiver's own tasks
+		auto pivot = std::stable_partition( _pending.begin(), _pending.end(),
+			[ tag ]( const QueueEntry& e ) {
+				return e.tag != tag;  // keep in left partition unless it matches
+			} );
+
+		migratedAny = ( pivot != _pending.end() );
+
+		for ( auto it = pivot; it != _pending.end(); ++it )
+		{
+			dest->_pending.push_back( std::move( *it ) );
+		}
+
+		_pending.erase( pivot, _pending.end() );
+	}  // locks released here
+
+	// notify dest's drain thread (if any) outside the lock, so a migration
+	// into an AutoDrainThread-backed loop wakes it the same way post() does -
+	// otherwise migrated tasks could sit unnoticed until something else
+	// happens to post() or drain() that loop
+	if ( migratedAny && dest->_postNotify )
+	{
+		dest->_postNotify();
 	}
-#endif
 }
 
-void EventLoop::executeEvents( std::queue< std::unique_ptr< CallableBase > >& queue )
+inline void EventLoop::setPostNotify( Callable< void() > notify )
 {
-	// RAII guard: record this loop as the draining context for this thread
-	// for the duration of the drain; saves and restores the previous value
-	// so nested calls (e.g. an event handler that manually calls processEvents
-	// on another loop) work correctly
-	EventLoop* previous = tls_drainingLoop;
-	tls_drainingLoop = this;
-	struct RestoreOnExit
-	{
-		EventLoop*& slot;
-		EventLoop* saved;
-		~RestoreOnExit() { slot = saved; }
-	} guard { tls_drainingLoop, previous };
-
-	while ( ! queue.empty() )
-	{
-		auto& task = queue.front();
-		if ( task )
-		{
-			task->invoke();
-		}
-		queue.pop();
-	}
+	_postNotify = std::move( notify );
 }
 
-#if PULSAR_ENABLE_THREAD
-void EventLoop::run()
+inline void EventLoop::clearPostNotify()
 {
-	while ( _running )
-	{
-		std::queue< std::unique_ptr< CallableBase > > localQueue;
-
-		{
-			platform::UniqueLock< platform::Mutex > lock( _queueMutex );
-			_cv.wait( lock, [ this ] { return ! _eventQueue.empty() || ! _running; } );
-
-			if ( ! _running )
-			{
-				break;
-			}
-
-			localQueue = std::move( _eventQueue );
-		}
-
-		executeEvents( localQueue );
-	}
+	_postNotify = Callable< void() >{};
 }
-#endif // PULSAR_ENABLE_THREAD
 
 } // namespace pulsar
 } // namespace kmac

@@ -129,6 +129,10 @@ private:
 
 	bool _retainCapacity;  ///< whether drain should maintain storage or reset to default-constructed lists
 
+#ifdef PULSAR_TEST_INJECT
+	void ( *_migrateTestHook )() = nullptr;
+#endif
+
 public:
 	/**
 	 * @brief Construct an EventLoop.
@@ -194,16 +198,29 @@ public:
 	void clearDrainThread() noexcept;
 
 	/**
-	 * @brief Returns true if events with this loop as their sender loop
-	 * should dispatch directly (synchronously) for the given thread,
-	 * rather than being deferred.
+	 * @brief The gate BasicEvent::operator() (and BasicRecordableEvent's
+	 * equivalent) uses to decide whether a trigger dispatches synchronously
+	 * on the calling thread immediately or is deferred to this loop's queue
+	 * to run whenever it is next drained (i.e. whether sender-loop
+	 * deferral applies for the given thread).
 	 *
-	 * True if @p id has either been registered via setDrainThread() (a
-	 * thread that has promised to service this loop may always dispatch
-	 * directly - queuing then immediately draining on the same thread has
-	 * no observable difference), or is, right now, actively executing this
-	 * loop's drain() call (so a reentrant trigger during that very drain
-	 * dispatches directly instead of taking an unnecessary queue round-trip).
+	 * Returns true if `id` is already this loop's execution context -
+	 * either because it has been registered via setDrainThread() (a thread
+	 * that has promised to service this loop may always dispatch directly -
+	 * queuing then immediately draining on the same thread has no
+	 * observable difference), or because it is, right now, actively
+	 * executing this loop's drain() call (so a reentrant trigger during
+	 * that very drain dispatches directly instead of taking an unnecessary
+	 * queue round-trip).  Any other thread defers, so the actual dispatch
+	 * runs on whichever thread is responsible for this loop rather than
+	 * unsynchronized on the caller's thread.
+	 *
+	 * This governs only whether event triggering happens now vs. later - it
+	 * has no bearing on how each connected handler is invoked once dispatch
+	 * does proceed.  That is decided separately and per-connection by
+	 * resolveConnectionType(), cached initially at connect time and
+	 * re-resolved on setEventLoop() switches as each handler's
+	 * ResolvedConnectionType.
 	 */
 	bool shouldDispatchDirectlyOnThread( platform::ThreadId id ) const noexcept;
 
@@ -247,6 +264,25 @@ public:
 	 * connection produced each one - see Trackable::setEventLoop().
 	 */
 	void migratePendingTo( EventLoop* dest, uint64_t tag );
+
+#ifdef PULSAR_TEST_INJECT
+	/**
+	 * @brief Test-only: installs a callback invoked from migratePendingTo()
+	 * immediately after both loops' _pendingMutex locks are acquired, but
+	 * before the partition/erase work begins.  Lets a test hold that
+	 * critical section open for a controlled duration, to deterministically
+	 * prove a concurrent drain() on the same source loop actually blocks on
+	 * the shared mutex, rather than hoping the scheduler happens to
+	 * interleave the two calls.
+	 *
+	 * Compiled out entirely - including this method and its backing member -
+	 * unless PULSAR_TEST_INJECT is defined, so normal builds (and every test
+	 * that doesn't opt in) are completely unaffected; sizeof(EventLoop) and
+	 * migratePendingTo()'s behavior are identical to the non-injected build
+	 * whenever no hook is installed.
+	 */
+	void setMigrateTestHook( void ( *hook )() );
+#endif
 
 private:
 	/**
@@ -391,6 +427,13 @@ inline void EventLoop::migratePendingTo( EventLoop* dest, uint64_t tag )
 		platform::UniqueLock< platform::Mutex > lockDst( dest->_pendingMutex, std::defer_lock );
 		std::lock( lockSrc, lockDst );
 
+#ifdef PULSAR_TEST_INJECT
+		if ( _migrateTestHook )
+		{
+			_migrateTestHook();
+		}
+#endif
+
 		// single pass over _pending: match this tag, preserving the
 		// relative order of all the receiver's own tasks
 		auto pivot = std::stable_partition( _pending.begin(), _pending.end(),
@@ -417,6 +460,13 @@ inline void EventLoop::migratePendingTo( EventLoop* dest, uint64_t tag )
 		dest->_postNotify();
 	}
 }
+
+#ifdef PULSAR_TEST_INJECT
+inline void EventLoop::setMigrateTestHook( void ( *hook )() )
+{
+	_migrateTestHook = hook;
+}
+#endif
 
 inline void EventLoop::setPostNotify( Callable< void() > notify )
 {

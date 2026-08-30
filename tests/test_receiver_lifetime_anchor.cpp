@@ -1,30 +1,64 @@
 #include "test_helpers.hpp"
 
-#include <kmac/pulsar/receiver_lifetime_anchor.h>
+// ---------------------------------------------------------------------------
+// Anchor / Tracked<T>
+//
+// A receiver doesn't have to derive from Trackable to participate safely in
+// a connection: embedding a plain pulsar::Anchor (an alias for Trackable) as
+// a member gives it something for the connection machinery to track, and
+// pulsar::Tracked<T> bundles that anchor with the receiver reference at the
+// connect() call site:
+//
+//   class PlainReceiver
+//   {
+//   public:
+//       void onValue( int v ) { ... }
+//       pulsar::Anchor pulsarAnchor;
+//   };
+//
+//   PlainReceiver receiver;
+//   sender.valueChanged.connect(
+//       pulsar::Tracked{ receiver, receiver.pulsarAnchor }, &PlainReceiver::onValue );
+//
+// When the anchor is destroyed (typically because the receiver itself was
+// destroyed), the connection is severed the same way it would be for a
+// Trackable-derived receiver.  setEventLoop()/eventLoop() are called
+// directly on the Anchor, since it is a Trackable.
+//
+// No test here does reentrant connect/disconnect from within its own
+// dispatch, and no test spawns real threads, so all three MutexType
+// variants (Event, SharedEvent, SingleThreadedEvent) are safe.  Sender
+// holds two events of different arity, so it is parametrized on MutexType
+// directly (BasicEvent<MutexType, Args...>) rather than a fixed alias.
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Test fixtures
 // ---------------------------------------------------------------------------
 
-class Sender : public pulsar::Object
+namespace {
+
+template< typename MutexType >
+class Sender : public pulsar::Trackable
 {
 public:
-	pulsar::Event< int > valueChanged;
-	pulsar::Event< int, int > twoArgs;
-
-	explicit Sender()
-		: valueChanged( this )
-		, twoArgs( this )
-	{
-	}
+	pulsar::BasicEvent< MutexType, int > valueChanged { this };
+	pulsar::BasicEvent< MutexType, int, int > twoArgs { this };
 };
 
-// non-Object-inheriting receiver - the typical use case for RLA
+} // namespace
+
+// non-Trackable-inheriting receiver - the typical use case for Anchor
 class PlainReceiver
 {
 public:
 	int callCount = 0;
 	int lastValue = -1;
+
+	// declared last among data members - see Anchor's doc comment in
+	// trackable.h for why this is a cheap, non-mandatory hardening
+	// measure rather than a strict requirement
+	pulsar::Anchor pulsarAnchor;
 
 	void onValue( int v )
 	{
@@ -37,65 +71,72 @@ public:
 		callCount++;
 		lastValue = a + b;
 	}
-
-	// declared last - after all data members handlers may access
-	pulsar::ReceiverLifetimeAnchor< PlainReceiver > pulsarAnchor { this };
 };
+
+template< typename MutexType >
+class ReceiverLifetimeAnchor : public ::testing::Test {};
+
+using MutexTypes = ::testing::Types<
+	pulsar::platform::RecursiveMutex,
+	pulsar::platform::SharedMutex,
+	pulsar::platform::NullMutex >;
+TYPED_TEST_SUITE( ReceiverLifetimeAnchor, MutexTypes );
 
 // ---------------------------------------------------------------------------
 // Basic connectivity
 // ---------------------------------------------------------------------------
 
-TEST( ReceiverLifetimeAnchor, ConnectAndReceive )
+TYPED_TEST( ReceiverLifetimeAnchor, ConnectAndReceive )
 {
-	auto sender = std::make_shared< Sender >();
+	Sender< TypeParam > sender;
 	PlainReceiver receiver;
 
-	sender->valueChanged.connect( receiver.pulsarAnchor, &PlainReceiver::onValue );
-	sender->valueChanged( 42 );
+	// explicit pulsar::Tracked unnecessary, but included as example
+	sender.valueChanged.connect( pulsar::Tracked { receiver, receiver.pulsarAnchor }, &PlainReceiver::onValue );
+	sender.valueChanged( 42 );
 
 	EXPECT_EQ( receiver.callCount, 1 );
 	EXPECT_EQ( receiver.lastValue, 42 );
 }
 
-TEST( ReceiverLifetimeAnchor, MultipleEmissions )
+TYPED_TEST( ReceiverLifetimeAnchor, MultipleEmissions )
 {
-	auto sender = std::make_shared< Sender >();
+	Sender< TypeParam > sender;
 	PlainReceiver receiver;
 
-	sender->valueChanged.connect( receiver.pulsarAnchor, &PlainReceiver::onValue );
+	sender.valueChanged.connect( { receiver, receiver.pulsarAnchor }, &PlainReceiver::onValue );
 
-	sender->valueChanged( 1 );
-	sender->valueChanged( 2 );
-	sender->valueChanged( 3 );
+	sender.valueChanged( 1 );
+	sender.valueChanged( 2 );
+	sender.valueChanged( 4 );
 
 	EXPECT_EQ( receiver.callCount, 3 );
-	EXPECT_EQ( receiver.lastValue, 3 );
+	EXPECT_EQ( receiver.lastValue, 4 );
 }
 
-TEST( ReceiverLifetimeAnchor, MultipleArguments )
+TYPED_TEST( ReceiverLifetimeAnchor, MultipleArguments )
 {
-	auto sender = std::make_shared< Sender >();
+	Sender< TypeParam > sender;
 	PlainReceiver receiver;
 
-	sender->twoArgs.connect( receiver.pulsarAnchor, &PlainReceiver::onTwo );
-	sender->twoArgs( 10, 20 );
+	sender.twoArgs.connect( { receiver, receiver.pulsarAnchor }, &PlainReceiver::onTwo );
+	sender.twoArgs( 10, 20 );
 
 	EXPECT_EQ( receiver.callCount, 1 );
 	EXPECT_EQ( receiver.lastValue, 30 );
 }
 
-TEST( ReceiverLifetimeAnchor, MultipleSenders )
+TYPED_TEST( ReceiverLifetimeAnchor, MultipleSenders )
 {
-	auto sender1 = std::make_shared< Sender >();
-	auto sender2 = std::make_shared< Sender >();
+	Sender< TypeParam > sender1;
+	Sender< TypeParam > sender2;
 	PlainReceiver receiver;
 
-	sender1->valueChanged.connect( receiver.pulsarAnchor, &PlainReceiver::onValue );
-	sender2->valueChanged.connect( receiver.pulsarAnchor, &PlainReceiver::onValue );
+	sender1.valueChanged.connect( { receiver, receiver.pulsarAnchor }, &PlainReceiver::onValue );
+	sender2.valueChanged.connect( { receiver, receiver.pulsarAnchor }, &PlainReceiver::onValue );
 
-	sender1->valueChanged( 1 );
-	sender2->valueChanged( 2 );
+	sender1.valueChanged( 1 );
+	sender2.valueChanged( 2 );
 
 	EXPECT_EQ( receiver.callCount, 2 );
 }
@@ -104,58 +145,61 @@ TEST( ReceiverLifetimeAnchor, MultipleSenders )
 // Lifetime management
 // ---------------------------------------------------------------------------
 
-TEST( ReceiverLifetimeAnchor, ConnectionSeveredOnReceiverDestruction )
+TYPED_TEST( ReceiverLifetimeAnchor, ConnectionSeveredOnReceiverDestruction )
 {
-	auto sender = std::make_shared< Sender >();
+	Sender< TypeParam > sender;
 	int callCount = 0;
 
 	{
 		PlainReceiver receiver;
-		sender->valueChanged.connect( receiver.pulsarAnchor, &PlainReceiver::onValue );
-		sender->valueChanged( 1 );
+		sender.valueChanged.connect( { receiver, receiver.pulsarAnchor }, &PlainReceiver::onValue );
+		sender.valueChanged( 1 );
 		callCount = receiver.callCount;
 	}
 	// receiver destroyed - connection should be severed
 
 	EXPECT_EQ( callCount, 1 );
 	// must not crash or invoke destroyed receiver
-	sender->valueChanged( 2 );
+	sender.valueChanged( 2 );
+
+	// callCount should still be 1
+	EXPECT_EQ( callCount, 1 );
 }
 
-TEST( ReceiverLifetimeAnchor, ManualDisconnect )
+TYPED_TEST( ReceiverLifetimeAnchor, ManualDisconnect )
 {
-	auto sender = std::make_shared< Sender >();
+	Sender< TypeParam > sender;
 	PlainReceiver receiver;
 
-	auto conn = sender->valueChanged.connect( receiver.pulsarAnchor, &PlainReceiver::onValue );
-	sender->valueChanged( 1 );
+	auto conn = sender.valueChanged.connect( { receiver, receiver.pulsarAnchor }, &PlainReceiver::onValue );
+	sender.valueChanged( 1 );
 	EXPECT_EQ( receiver.callCount, 1 );
 
 	conn.disconnect();
-	sender->valueChanged( 2 );
+	sender.valueChanged( 2 );
 	EXPECT_EQ( receiver.callCount, 1 );
 }
 
-TEST( ReceiverLifetimeAnchor, ConnectionHandleIsConnected )
+TYPED_TEST( ReceiverLifetimeAnchor, ConnectionHandleIsConnected )
 {
-	auto sender = std::make_shared< Sender >();
+	Sender< TypeParam > sender;
 	PlainReceiver receiver;
 
-	auto conn = sender->valueChanged.connect( receiver.pulsarAnchor, &PlainReceiver::onValue );
+	auto conn = sender.valueChanged.connect( { receiver, receiver.pulsarAnchor }, &PlainReceiver::onValue );
 	EXPECT_TRUE( conn.isConnected() );
 
 	conn.disconnect();
 	EXPECT_FALSE( conn.isConnected() );
 }
 
-TEST( ReceiverLifetimeAnchor, SenderDestroyedDoesNotCrash )
+TYPED_TEST( ReceiverLifetimeAnchor, SenderDestroyedDoesNotCrash )
 {
 	PlainReceiver receiver;
 
 	{
-		auto sender = std::make_shared< Sender >();
-		sender->valueChanged.connect( receiver.pulsarAnchor, &PlainReceiver::onValue );
-		sender->valueChanged( 1 );
+		Sender< TypeParam > sender;
+		sender.valueChanged.connect( { receiver, receiver.pulsarAnchor }, &PlainReceiver::onValue );
+		sender.valueChanged( 1 );
 	}
 	// sender destroyed - receiver still alive, just no more events
 
@@ -163,36 +207,39 @@ TEST( ReceiverLifetimeAnchor, SenderDestroyedDoesNotCrash )
 }
 
 // ---------------------------------------------------------------------------
-// RLAnchor alias
+// The pattern works with any anchor member name
 // ---------------------------------------------------------------------------
 
-TEST( ReceiverLifetimeAnchor, RLAnchorAlias )
+TYPED_TEST( ReceiverLifetimeAnchor, AnchorPatternWithDifferentMemberName )
 {
 	class AliasReceiver
 	{
 	public:
 		int callCount = 0;
+		pulsar::Anchor lifetimeAnchor;
 		void onValue( int ) { callCount++; }
-		pulsar::RLAnchor< AliasReceiver > pulsarAnchor { this };
 	};
 
-	auto sender = std::make_shared< Sender >();
+	Sender< TypeParam > sender;
 	AliasReceiver receiver;
 
-	sender->valueChanged.connect( receiver.pulsarAnchor, &AliasReceiver::onValue );
-	sender->valueChanged( 99 );
+	sender.valueChanged.connect( { receiver, receiver.lifetimeAnchor }, &AliasReceiver::onValue );
+	sender.valueChanged( 99 );
 
 	EXPECT_EQ( receiver.callCount, 1 );
 }
 
 // ---------------------------------------------------------------------------
-// EventLoop forwarding
+// EventLoop access
 // ---------------------------------------------------------------------------
 
-TEST( ReceiverLifetimeAnchor, SetEventLoopForwards )
+TEST( ReceiverLifetimeAnchorUntyped, AnchorHasNativeEventLoopAccessors )
 {
+	// doesn't touch a sender Event at all - pure Anchor mechanics, so stays
+	// a plain TEST() rather than running 3x for no benefit
 	PlainReceiver receiver;
 
-	// just verify setEventLoop and eventLoop() compile and round-trip
+	// eventLoop()/setEventLoop() are called directly on the Anchor, since
+	// it is a Trackable
 	EXPECT_EQ( receiver.pulsarAnchor.eventLoop(), nullptr );
 }

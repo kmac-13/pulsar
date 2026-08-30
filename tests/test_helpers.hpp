@@ -1,6 +1,6 @@
 #pragma once
 
-// Prevent Windows macro pollution
+// prevent Windows macro pollution
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -53,10 +53,10 @@ inline void anotherStaticHandler( int, int )
 // Shared test fixture classes
 // ---------------------------------------------------------------------------
 
-class TestButton : public pulsar::Object
+class TestButton : public pulsar::Trackable
 {
 public:
-	pulsar::Event< int, int > clicked{ this };
+	pulsar::Event< int, int > clicked { this };
 
 	void click( int x, int y )
 	{
@@ -64,7 +64,7 @@ public:
 	}
 };
 
-class TestHandler : public pulsar::Object
+class TestHandler : public pulsar::Trackable
 {
 public:
 	int callCount = 0;
@@ -86,7 +86,53 @@ public:
 	}
 };
 
-class TestValidator : public pulsar::Object
+// ---------------------------------------------------------------------------
+// MutexType-templated variants of the fixtures above, for tests that are
+// parametrized across Event/SharedEvent/SingleThreadedEvent (i.e.
+// BasicEvent<RecursiveMutex,...>/BasicEvent<SharedMutex,...>/
+// BasicEvent<NullMutex,...>).  Kept separate from the untemplated
+// TestButton/DataSender/RelayNode above (rather than templating those in
+// place) so files not yet converted keep compiling unchanged.
+// ---------------------------------------------------------------------------
+
+template< typename MutexType >
+class TestButtonT : public pulsar::Trackable
+{
+public:
+	pulsar::BasicEvent< MutexType, int, int > clicked { this };
+
+	void click( int x, int y )
+	{
+		clicked( x, y );
+	}
+};
+
+template< typename MutexType >
+class DataSenderT : public pulsar::Trackable
+{
+public:
+	pulsar::BasicEvent< MutexType, int > dataReady { this };
+
+	void sendData( int value )
+	{
+		dataReady( value );
+	}
+};
+
+template< typename MutexType >
+class RelayNodeT : public pulsar::Trackable
+{
+public:
+	pulsar::BasicEvent< MutexType, int > dataIn { this };
+	pulsar::BasicEvent< MutexType, int > dataOut { this };
+
+	void setupRelay()
+	{
+		dataIn.connectLambda( *this, [ this ]( int value ) { dataOut( value ); } );
+	}
+};
+
+class TestValidator : public pulsar::Trackable
 {
 public:
 	bool checkValue( int value )
@@ -95,10 +141,10 @@ public:
 	}
 };
 
-class DataSender : public pulsar::Object
+class DataSender : public pulsar::Trackable
 {
 public:
-	pulsar::Event< int > dataReady{ this };
+	pulsar::Event< int > dataReady { this };
 
 	void sendData( int value )
 	{
@@ -106,7 +152,7 @@ public:
 	}
 };
 
-class DataReceiver : public pulsar::Object
+class DataReceiver : public pulsar::Trackable
 {
 public:
 	int callCount = 0;
@@ -128,19 +174,19 @@ public:
 	}
 };
 
-class RelayNode : public pulsar::Object
+class RelayNode : public pulsar::Trackable
 {
 public:
-	pulsar::Event< int > dataIn{ this };
-	pulsar::Event< int > dataOut{ this };
+	pulsar::Event< int > dataIn { this };
+	pulsar::Event< int > dataOut { this };
 
 	void setupRelay()
 	{
-		dataIn.connect( shared_from_this(), [ this ]( int value ) { dataOut( value ); } );
+		dataIn.connectLambda( *this, [ this ]( int value ) { dataOut( value ); } );
 	}
 };
 
-class Checker : public pulsar::Object
+class Checker : public pulsar::Trackable
 {
 public:
 	bool expectedResult = true;

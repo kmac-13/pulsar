@@ -116,112 +116,6 @@ using Mutex = std::mutex;
 using RecursiveMutex = std::recursive_mutex;
 
 /**
- * @brief Experimental recursive mutex with a cheaper uncontended/
- * non-reentrant fast path than std::recursive_mutex.
- *
- * Rationale: std::recursive_mutex's per-platform implementation typically
- * does extra bookkeeping (e.g. a thread-ID comparison plus internal
- * recursion-count tracking) on EVERY lock() call, even when the calling
- * thread never actually re-enters - the overwhelmingly common case for
- * Event::_mutex (most emissions are not reentrant).  Measured on Linux/
- * glibc, std::recursive_mutex costs ~2 ns more than std::mutex per
- * uncontended lock(); the gap is suspected larger on Windows/MinGW,
- * consistent with Pulsar's measured ~7-8 ns ST-vs-TS emission gap.
- *
- * Design: wraps a plain std::mutex (cheaper uncontended lock than
- * recursive_mutex per the above) plus a manually-tracked owner thread ID
- * and depth counter.  lock() checks "is the calling thread already the
- * owner?" via a relaxed atomic load BEFORE attempting the underlying
- * mutex - if so, this is a reentrant call, depth is incremented, and the
- * underlying mutex is untouched (already held by this thread from the
- * outer lock() call).  If not, lock() blocks on the underlying mutex as
- * normal, then records ownership.
- *
- * Same Lockable-only contract as RecursiveMutex (lock/unlock/try_lock) -
- * no condition_variable compatibility needed, matching Event::_mutex's
- * actual usage (LockGuard/UniqueLock only, no wait()).
- *
- * THREAD SAFETY NOTE: _owner is read via relaxed load by every lock()
- * call (including from threads that do NOT hold the lock) - this is safe
- * because:
- *  - a thread only ever WRITES _owner to its own ID (after acquiring
- *    _inner) or to the "no owner" sentinel (right before releasing
- *    _inner), so a reader can only ever observe either some OTHER
- *    thread's ID (in which case it must contend for _inner regardless -
- *    correct, since it is genuinely not the owner) or its OWN ID
- *    (which is only possible if this thread itself wrote it, establishing
- *    the fast path correctly) - there is no value _owner could hold that
- *    would cause a non-owning thread to incorrectly take the fast path.
- */
-class FastRecursiveMutex
-{
-	static_assert( std::is_trivially_copyable_v< std::thread::id >,
-		"FastRecursiveMutex requires std::thread::id to be trivially copyable "
-		"for std::atomic<std::thread::id> to be well-formed per the standard; "
-		"true for libstdc++ (Linux, MinGW) and MSVC's STL" );
-
-private:
-	std::mutex _inner;
-	std::atomic< std::thread::id > _owner { std::thread::id{} };
-	int _depth = 0;  ///< only touched while _inner is held by the owning thread
-
-public:
-	void lock()
-	{
-		const std::thread::id self = std::this_thread::get_id();
-
-		if ( _owner.load( std::memory_order_relaxed ) == self )
-		{
-			// reentrant: this thread already holds _inner from an outer
-			// lock() call - no need to touch _inner again
-			++_depth;
-			return;
-		}
-
-		_inner.lock();
-		_owner.store( self, std::memory_order_relaxed );
-		_depth = 1;
-	}
-
-	bool try_lock()
-	{
-		const std::thread::id self = std::this_thread::get_id();
-
-		if ( _owner.load( std::memory_order_relaxed ) == self )
-		{
-			++_depth;
-			return true;
-		}
-
-		if ( _inner.try_lock() )
-		{
-			_owner.store( self, std::memory_order_relaxed );
-			_depth = 1;
-			return true;
-		}
-
-		return false;
-	}
-
-	void unlock()
-	{
-		// _depth and _owner here are only ever touched by the thread that
-		// currently owns the lock (this call only makes sense if the
-		// calling thread holds it - same contract as recursive_mutex::
-		// unlock() called without a matching lock(), which is UB), so no
-		// atomicity is needed for the decrement itself.
-		if ( --_depth == 0 )
-		{
-			// clear ownership BEFORE unlocking _inner: once _inner is
-			// unlocked, another thread may immediately acquire it and
-			// must not observe a stale _owner pointing at this thread
-			_owner.store( std::thread::id{}, std::memory_order_relaxed );
-			_inner.unlock();
-		}
-	}
-};
-
-/**
  * @brief Shared/exclusive mutex - satisfies the `SharedMutex` named requirement.
  *
  * Maps to `std::shared_mutex` when `PULSAR_THREAD_SAFE` is set (the default).
@@ -315,8 +209,6 @@ struct Mutex
 };
 
 using RecursiveMutex = Mutex;
-
-using FastRecursiveMutex = Mutex;
 
 /**
  * @brief No-op shared mutex for single-threaded / bare-metal targets.

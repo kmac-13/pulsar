@@ -44,7 +44,7 @@ class Trackable
 {
 	// need to support access to the two private registration methods
 
-	template< typename MutexType, typename... Args >
+	template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 	friend class EventStorage;
 
 	template< typename ReturnType, typename MutexType, typename... Args >
@@ -283,14 +283,47 @@ inline void Trackable::trackConnection(
 	uint32_t index,
 	uint32_t generation )
 {
-	std::lock_guard< platform::Mutex > lock( _mutex );
+	// take a copy (not a destructive swap) under _mutex, matching
+	// setEventLoop()'s existing safe pattern, so the real list is never
+	// observably empty except during disconnectAll()'s own drain - see
+	// trackable.h's file docs for why that matters
+	std::vector< TrackedConnection > snapshot;
+	{
+		std::lock_guard< platform::Mutex > lock( _mutex );
+		snapshot = _trackedConnections;
+	}
 
-	// prune disconnected connections
+	// determine which snapshot entries are dead without holding _mutex, so
+	// we never call into an EventImpl mutex while holding _mutex (isHandlerConnected()
+	// acquires the event's own mutex for EventImpl-backed events)
+	std::vector< bool > isDead( snapshot.size() );
+	for ( size_t i = 0; i < snapshot.size(); ++i )
+	{
+		auto entryImpl = snapshot[ i ].impl.lock();
+		isDead[ i ] = ! entryImpl || ! entryImpl->isHandlerConnected( snapshot[ i ].index, snapshot[ i ].generation );
+	}
+
+	// reacquire _mutex and erase only the confirmed-dead entries from the
+	// *real* list, matched by identity rather than position - the real list
+	// may have changed in the interim (another thread could have added or
+	// pruned connections), which is fine since owner_before()-based identity
+	// matching still finds the same entries even if their index shifted
+	std::lock_guard< platform::Mutex > lock( _mutex );
 	_trackedConnections.erase(
 		std::remove_if( _trackedConnections.begin(), _trackedConnections.end(),
-			[]( const TrackedConnection& tcon ) {
-				auto impl = tcon.impl.lock();
-				return ! impl || ! impl->isHandlerConnected( tcon.index, tcon.generation );
+			[ &snapshot, &isDead ]( const TrackedConnection& tcon ) {
+				for ( size_t i = 0; i < snapshot.size(); ++i )
+				{
+					if ( isDead[ i ]
+						&& ! tcon.impl.owner_before( snapshot[ i ].impl )
+						&& ! snapshot[ i ].impl.owner_before( tcon.impl )
+						&& tcon.index == snapshot[ i ].index
+						&& tcon.generation == snapshot[ i ].generation )
+					{
+						return true;
+					}
+				}
+				return false;
 			} ),
 		_trackedConnections.end() );
 

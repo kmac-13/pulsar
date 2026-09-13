@@ -291,6 +291,18 @@ struct EventImpl : EventImplBase
 	 */
 	void preLockDisconnectAll();
 
+	/**
+	 * @brief Locate the single earliest active handler for which `matches`
+	 * returns true, under the exclusive lock, and return it as a one-element
+	 * GenData vector (empty if none matched).  Deliberately returns rather
+	 * than disconnecting directly: the caller releases this lock before
+	 * calling disconnectHandlers(), which re-locks - taking the lock
+	 * twice rather than nesting it.  ImplT-agnostic callers therefore
+	 * never need to know EventImpl's storage layout at all.
+	 */
+	template< typename MatchFn >
+	std::vector< GenData > findFirstMatch( MatchFn&& matches ) const;
+
 private:
 	// ---- internal plumbing - nothing outside EventImpl calls these ----------
 
@@ -938,6 +950,23 @@ void EventImpl< MutexType, Args... >::preLockDisconnectAll()
 
 	nonDirectCount = 0;
 	predicateCount = 0;
+}
+
+template< typename MutexType, typename... Args >
+template< typename MatchFn >
+std::vector< GenData > EventImpl< MutexType, Args... >::findFirstMatch( MatchFn&& matches ) const
+{
+	std::vector< GenData > result;
+	platform::LockGuard< MutexType > lock( mutex );
+	for ( uint32_t i = 0; i < static_cast< uint32_t >( handlers.size() ); ++i )
+	{
+		if ( handlers[ i ].flags.isActive() && matches( handlers[ i ].handler ) )
+		{
+			result.emplace_back( i, handlers[ i ].generation );
+			break;  // one match only; duplicates left in place
+		}
+	}
+	return result;
 }
 
 // ===========================================================================

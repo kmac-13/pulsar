@@ -58,7 +58,7 @@ private:
 
 	/// raw pointer to the inspected event's storage; never null after construction -
 	/// the caller is responsible for ensuring the event outlives the inspector
-	EventStorage< MutexType, Args... >* _storage;
+	EventStorage< kmac::pulsar::EventImpl, MutexType, Args... >* _storage;
 
 public:
 	/**
@@ -201,7 +201,7 @@ inline EventInspector< MutexType, Args... >::EventInspector(
 	BasicPrivateEvent< FriendType, MutexType, Args... >& event )
 	// static_cast is safe: BasicPrivateEvent inherits BasicEvent which inherits
 	// EventStorage; EventInspector is a friend with knowledge of this hierarchy
-	: _storage( static_cast< EventStorage< MutexType, Args... >* >( &event ) )
+	: _storage( static_cast< EventStorage< kmac::pulsar::EventImpl, MutexType, Args... >* >( &event ) )
 {
 }
 

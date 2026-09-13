@@ -37,9 +37,9 @@ namespace pulsar {
  * @tparam Args argument types forwarded to connected handlers
  */
 template< typename MutexType, typename... Args >
-class BasicEvent : public EventStorage< MutexType, Args... >
+class BasicEvent : public EventStorage< kmac::pulsar::EventImpl, MutexType, Args... >
 {
-	using Base = EventStorage< MutexType, Args... >;
+	using Base = EventStorage< kmac::pulsar::EventImpl, MutexType, Args... >;
 
 public:
 	using Base::Base;  // inherit constructors

@@ -237,7 +237,7 @@ class BlockGuard
 	template< typename MutexType, typename... Args >
 	friend class BasicEvent;
 
-	template< typename MutexType, typename... Args >
+	template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 	friend class EventStorage;
 
 private:

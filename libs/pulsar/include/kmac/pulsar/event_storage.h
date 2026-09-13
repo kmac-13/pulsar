@@ -109,10 +109,12 @@ Tracked( T&, Trackable& ) -> Tracked< T >;
 // EventStorage
 // ===========================================================================
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 class EventStorage
 {
-	// EventInspector reads _impl directly
+	// EventInspector reads _impl directly (BasicEvent-only introspection tool;
+	// harmless to leave un-parameterised over ImplT since EventInspector is
+	// never instantiated against a non-EventImpl-backed EventStorage today)
 	friend class EventInspector< MutexType, Args... >;
 
 public:
@@ -164,7 +166,7 @@ public:
 
 protected:
 	using HandlerEntry = kmac::pulsar::HandlerEntry< Args... >;
-	using EventImpl = kmac::pulsar::EventImpl< MutexType, Args... >;
+	using EventImpl = ImplT< MutexType, Args... >;
 
 	/// heap-allocated implementation; shared with all Connection handles,
 	/// protected so BasicEvent and RecordableBasicEvent can call
@@ -695,24 +697,24 @@ private:
 // params()
 // ===========================================================================
 
-template< typename MutexType, typename... Args >
-inline typename EventStorage< MutexType, Args... >::ConnParams
-EventStorage< MutexType, Args... >::params()
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline typename EventStorage< ImplT, MutexType, Args... >::ConnParams
+EventStorage< ImplT, MutexType, Args... >::params()
 {
 	return ConnParams();
 }
 
-template< typename MutexType, typename... Args >
-inline typename EventStorage< MutexType, Args... >::ConnParams
-EventStorage< MutexType, Args... >::params( uint32_t priority )
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline typename EventStorage< ImplT, MutexType, Args... >::ConnParams
+EventStorage< ImplT, MutexType, Args... >::params( uint32_t priority )
 {
 	return ConnParams( priority );
 }
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< typename Pred, typename >
-inline typename EventStorage< MutexType, Args... >::ConnParams
-EventStorage< MutexType, Args... >::params( Pred pred, PredicateContext predicateContext )
+inline typename EventStorage< ImplT, MutexType, Args... >::ConnParams
+EventStorage< ImplT, MutexType, Args... >::params( Pred pred, PredicateContext predicateContext )
 {
 	return ConnParams( std::move( pred ), predicateContext );
 }
@@ -722,14 +724,14 @@ EventStorage< MutexType, Args... >::params( Pred pred, PredicateContext predicat
 // Constructors
 // ===========================================================================
 
-template< typename MutexType, typename... Args >
-inline EventStorage< MutexType, Args... >::EventStorage()
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline EventStorage< ImplT, MutexType, Args... >::EventStorage()
 {
 	_impl->weakSelf = platform::WeakPtr< EventImplBase >( _impl );
 }
 
-template< typename MutexType, typename... Args >
-inline EventStorage< MutexType, Args... >::EventStorage( Trackable* owner )
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline EventStorage< ImplT, MutexType, Args... >::EventStorage( Trackable* owner )
 {
 	_impl->weakSelf = platform::WeakPtr< EventImplBase >( _impl );
 	_impl->owner = owner;
@@ -739,8 +741,8 @@ inline EventStorage< MutexType, Args... >::EventStorage( Trackable* owner )
 	}
 }
 
-template< typename MutexType, typename... Args >
-inline Trackable* EventStorage< MutexType, Args... >::owner() const
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline Trackable* EventStorage< ImplT, MutexType, Args... >::owner() const
 {
 	return _impl->owner;
 }
@@ -750,9 +752,9 @@ inline Trackable* EventStorage< MutexType, Args... >::owner() const
 // object / method connections
 // ===========================================================================
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< auto Method, typename T >
-inline Connection EventStorage< MutexType, Args... >::connect(
+inline Connection EventStorage< ImplT, MutexType, Args... >::connect(
 	T& receiver, ConnectionType type, ConnParams params )
 {
 	Trackable* tracker = nullptr;
@@ -774,17 +776,17 @@ inline Connection EventStorage< MutexType, Args... >::connect(
 		params.hasPredicate(), params.predicate(), params.predicateContext(), params.isSingleShot() );
 }
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< auto Method, typename T >
-inline Connection EventStorage< MutexType, Args... >::connect(
+inline Connection EventStorage< ImplT, MutexType, Args... >::connect(
 	T& receiver, ConnParams params, ConnectionType type )
 {
 	return connect< Method >( receiver, type, std::move( params ) );
 }
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< auto Method, typename T >
-inline Connection EventStorage< MutexType, Args... >::connect(
+inline Connection EventStorage< ImplT, MutexType, Args... >::connect(
 	detail::NonDeduced_t< Tracked< T > > tracked,
 	ConnectionType type, ConnParams params )
 {
@@ -802,18 +804,18 @@ inline Connection EventStorage< MutexType, Args... >::connect(
 		params.hasPredicate(), params.predicate(), params.predicateContext(), params.isSingleShot() );
 }
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< auto Method, typename T >
-inline Connection EventStorage< MutexType, Args... >::connect(
+inline Connection EventStorage< ImplT, MutexType, Args... >::connect(
 	detail::NonDeduced_t< Tracked< T > > tracked,
 	ConnParams params, ConnectionType type )
 {
 	return connect< Method, T >( tracked, type, std::move( params ) );
 }
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< typename T, typename... MethodArgs >
-inline Connection EventStorage< MutexType, Args... >::connect(
+inline Connection EventStorage< ImplT, MutexType, Args... >::connect(
 	T& receiver, void ( T::*method )( MethodArgs... ),
 	ConnectionType type, ConnParams params )
 {
@@ -832,18 +834,18 @@ inline Connection EventStorage< MutexType, Args... >::connect(
 		params.hasPredicate(), params.predicate(), params.predicateContext(), params.isSingleShot() );
 }
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< typename T, typename... MethodArgs >
-inline Connection EventStorage< MutexType, Args... >::connect(
+inline Connection EventStorage< ImplT, MutexType, Args... >::connect(
 	T& receiver, void ( T::*method )( MethodArgs... ),
 	ConnParams params, ConnectionType type )
 {
 	return connect( receiver, method, type, std::move( params ) );
 }
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< typename T, typename... MethodArgs >
-inline Connection EventStorage< MutexType, Args... >::connect(
+inline Connection EventStorage< ImplT, MutexType, Args... >::connect(
 	detail::NonDeduced_t< Tracked< T > > tracked,
 	void ( T::*method )( MethodArgs... ),
 	ConnectionType type, ConnParams params )
@@ -858,9 +860,9 @@ inline Connection EventStorage< MutexType, Args... >::connect(
 		params.hasPredicate(), params.predicate(), params.predicateContext(), params.isSingleShot() );
 }
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< typename T, typename... MethodArgs >
-inline Connection EventStorage< MutexType, Args... >::connect(
+inline Connection EventStorage< ImplT, MutexType, Args... >::connect(
 	detail::NonDeduced_t< Tracked< T > > tracked,
 	void ( T::*method )( MethodArgs... ),
 	ConnParams params, ConnectionType type )
@@ -872,9 +874,9 @@ inline Connection EventStorage< MutexType, Args... >::connect(
 // free-function connections
 // ===========================================================================
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< auto Func >
-inline Connection EventStorage< MutexType, Args... >::connectFree( ConnectionType type, ConnParams params )
+inline Connection EventStorage< ImplT, MutexType, Args... >::connectFree( ConnectionType type, ConnParams params )
 {
 	HandlerType handler;
 	if constexpr ( detail::FunctionArity_v< decltype( Func ) > == sizeof...( Args ) )
@@ -890,15 +892,15 @@ inline Connection EventStorage< MutexType, Args... >::connectFree( ConnectionTyp
 		params.hasPredicate(), params.predicate(), params.predicateContext(), params.isSingleShot() );
 }
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< auto Func >
-inline Connection EventStorage< MutexType, Args... >::connectFree( ConnParams params, ConnectionType type )
+inline Connection EventStorage< ImplT, MutexType, Args... >::connectFree( ConnParams params, ConnectionType type )
 {
 	return connectFree< Func >( type, std::move( params ) );
 }
 
-template< typename MutexType, typename... Args >
-inline Connection EventStorage< MutexType, Args... >::connectFree(
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline Connection EventStorage< ImplT, MutexType, Args... >::connectFree(
 	void (*func)( Args... ), ConnectionType type, ConnParams params )
 {
 	return connectImpl(
@@ -906,16 +908,16 @@ inline Connection EventStorage< MutexType, Args... >::connectFree(
 		params.hasPredicate(), params.predicate(), params.predicateContext(), params.isSingleShot() );
 }
 
-template< typename MutexType, typename... Args >
-inline Connection EventStorage< MutexType, Args... >::connectFree(
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline Connection EventStorage< ImplT, MutexType, Args... >::connectFree(
 	void (*func)( Args... ), ConnParams params, ConnectionType type )
 {
 	return connectFree( func, type, std::move( params ) );
 }
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< auto Func >
-inline Connection EventStorage< MutexType, Args... >::connectFree(
+inline Connection EventStorage< ImplT, MutexType, Args... >::connectFree(
 	Trackable& tracker, ConnectionType type, ConnParams params )
 {
 	HandlerType handler;
@@ -932,16 +934,16 @@ inline Connection EventStorage< MutexType, Args... >::connectFree(
 		params.hasPredicate(), params.predicate(), params.predicateContext(), params.isSingleShot() );
 }
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< auto Func >
-inline Connection EventStorage< MutexType, Args... >::connectFree(
+inline Connection EventStorage< ImplT, MutexType, Args... >::connectFree(
 	Trackable& tracker, ConnParams params, ConnectionType type )
 {
 	return connectFree< Func >( tracker, type, std::move( params ) );
 }
 
-template< typename MutexType, typename... Args >
-inline Connection EventStorage< MutexType, Args... >::connectFree(
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline Connection EventStorage< ImplT, MutexType, Args... >::connectFree(
 	Trackable& tracker, void (*func)( Args... ), ConnectionType type, ConnParams params )
 {
 	return connectImpl(
@@ -949,8 +951,8 @@ inline Connection EventStorage< MutexType, Args... >::connectFree(
 		params.hasPredicate(), params.predicate(), params.predicateContext(), params.isSingleShot() );
 }
 
-template< typename MutexType, typename... Args >
-inline Connection EventStorage< MutexType, Args... >::connectFree(
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline Connection EventStorage< ImplT, MutexType, Args... >::connectFree(
 	Trackable& tracker, void (*func)( Args... ), ConnParams params, ConnectionType type )
 {
 	return connectFree( tracker, func, type, std::move( params ) );
@@ -960,8 +962,8 @@ inline Connection EventStorage< MutexType, Args... >::connectFree(
 // lambda / functor connections
 // ===========================================================================
 
-template< typename MutexType, typename... Args >
-inline Connection EventStorage< MutexType, Args... >::connectLambda(
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline Connection EventStorage< ImplT, MutexType, Args... >::connectLambda(
 	Trackable& tracker, HandlerType&& handler, ConnectionType type, ConnParams params )
 {
 	return connectImpl(
@@ -969,16 +971,16 @@ inline Connection EventStorage< MutexType, Args... >::connectLambda(
 		params.hasPredicate(), params.predicate(), params.predicateContext(), params.isSingleShot() );
 }
 
-template< typename MutexType, typename... Args >
-inline Connection EventStorage< MutexType, Args... >::connectLambda(
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline Connection EventStorage< ImplT, MutexType, Args... >::connectLambda(
 	Trackable& tracker, HandlerType&& handler, ConnParams params, ConnectionType type )
 {
 	return connectLambda( tracker, std::move( handler ), type, std::move( params ) );
 }
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< typename F >
-inline Connection EventStorage< MutexType, Args... >::connectLambda(
+inline Connection EventStorage< ImplT, MutexType, Args... >::connectLambda(
 	Trackable& tracker, F&& functor, ConnectionType type, ConnParams params )
 {
 	return connectImpl(
@@ -986,16 +988,16 @@ inline Connection EventStorage< MutexType, Args... >::connectLambda(
 		params.hasPredicate(), params.predicate(), params.predicateContext(), params.isSingleShot() );
 }
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< typename F >
-inline Connection EventStorage< MutexType, Args... >::connectLambda(
+inline Connection EventStorage< ImplT, MutexType, Args... >::connectLambda(
 	Trackable& tracker, F&& functor, ConnParams params, ConnectionType type )
 {
 	return connectLambda( tracker, std::forward< F >( functor ), type, std::move( params ) );
 }
 
-template< typename MutexType, typename... Args >
-inline Connection EventStorage< MutexType, Args... >::connectLambda(
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline Connection EventStorage< ImplT, MutexType, Args... >::connectLambda(
 	HandlerType&& handler, ConnectionType type, ConnParams params )
 {
 	return connectImpl(
@@ -1003,16 +1005,16 @@ inline Connection EventStorage< MutexType, Args... >::connectLambda(
 		params.hasPredicate(), params.predicate(), params.predicateContext(), params.isSingleShot() );
 }
 
-template< typename MutexType, typename... Args >
-inline Connection EventStorage< MutexType, Args... >::connectLambda(
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline Connection EventStorage< ImplT, MutexType, Args... >::connectLambda(
 	HandlerType&& handler, ConnParams params, ConnectionType type )
 {
 	return connectLambda( std::move( handler ), type, std::move( params ) );
 }
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< typename F >
-inline Connection EventStorage< MutexType, Args... >::connectLambda(
+inline Connection EventStorage< ImplT, MutexType, Args... >::connectLambda(
 	F&& functor, ConnectionType type, ConnParams params )
 {
 	return connectImpl(
@@ -1020,9 +1022,9 @@ inline Connection EventStorage< MutexType, Args... >::connectLambda(
 		params.hasPredicate(), params.predicate(), params.predicateContext(), params.isSingleShot() );
 }
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< typename F >
-inline Connection EventStorage< MutexType, Args... >::connectLambda(
+inline Connection EventStorage< ImplT, MutexType, Args... >::connectLambda(
 	F&& functor, ConnParams params, ConnectionType type )
 {
 	return connectLambda( std::forward< F >( functor ), type, std::move( params ) );
@@ -1033,9 +1035,9 @@ inline Connection EventStorage< MutexType, Args... >::connectLambda(
 // event chaining
 // ===========================================================================
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< typename TargetEvent >
-inline Connection EventStorage< MutexType, Args... >::forwardTo(
+inline Connection EventStorage< ImplT, MutexType, Args... >::forwardTo(
 	TargetEvent& targetEvent,
 	ConnectionType type,
 	ConnParams params )
@@ -1051,9 +1053,9 @@ inline Connection EventStorage< MutexType, Args... >::forwardTo(
 		params.hasPredicate(), params.predicate(), params.predicateContext(), params.isSingleShot() );
 }
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< typename TargetEvent >
-inline Connection EventStorage< MutexType, Args... >::forwardTo(
+inline Connection EventStorage< ImplT, MutexType, Args... >::forwardTo(
 	TargetEvent& targetEvent,
 	ConnParams params,
 	ConnectionType type )
@@ -1065,20 +1067,20 @@ inline Connection EventStorage< MutexType, Args... >::forwardTo(
 // blocking
 // ===========================================================================
 
-template< typename MutexType, typename... Args >
-inline void EventStorage< MutexType, Args... >::block()
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline void EventStorage< ImplT, MutexType, Args... >::block()
 {
 	_impl->block();
 }
 
-template< typename MutexType, typename... Args >
-inline void EventStorage< MutexType, Args... >::unblock()
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline void EventStorage< ImplT, MutexType, Args... >::unblock()
 {
 	_impl->unblock();
 }
 
-template< typename MutexType, typename... Args >
-inline BlockGuard EventStorage< MutexType, Args... >::blockGuard()
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline BlockGuard EventStorage< ImplT, MutexType, Args... >::blockGuard()
 {
 	_impl->block();
 	return BlockGuard(
@@ -1091,16 +1093,16 @@ inline BlockGuard EventStorage< MutexType, Args... >::blockGuard()
 // disconnection
 // ===========================================================================
 
-template< typename MutexType, typename... Args >
-inline void EventStorage< MutexType, Args... >::disconnect( Trackable& tracker )
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline void EventStorage< ImplT, MutexType, Args... >::disconnect( Trackable& tracker )
 {
 	auto connections = tracker.extractConnectionsTo( _impl.get() );
 	_impl->disconnectHandlers( connections );
 }
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< auto Method, typename T >
-inline void EventStorage< MutexType, Args... >::disconnect( T& receiver )
+inline void EventStorage< ImplT, MutexType, Args... >::disconnect( T& receiver )
 {
 	HandlerType target;
 	if constexpr ( detail::MethodArity_v< decltype( Method ) > == sizeof...( Args ) )
@@ -1112,27 +1114,14 @@ inline void EventStorage< MutexType, Args... >::disconnect( T& receiver )
 		target = HandlerType::template createPartial< Method >( &receiver );
 	}
 
-	std::vector< GenData > toDisconnect;
-	{
-		platform::LockGuard< MutexType > lock( _impl->mutex );
-		for ( uint32_t i = 0;
-			i < static_cast< uint32_t >( _impl->handlers.size() );
-			++i )
-		{
-			auto& entry = _impl->handlers[ i ];
-			if ( entry.flags.isActive() && entry.handler == target )
-			{
-				toDisconnect.emplace_back( i, _impl->handlers[ i ].generation );
-				break;  // remove one connection; leave any duplicates in place
-			}
-		}
-	}
+	auto toDisconnect = _impl->findFirstMatch(
+		[ & ]( const HandlerType& handler ) { return handler == target; } );
 	_impl->disconnectHandlers( toDisconnect );
 }
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< auto Func >
-inline void EventStorage< MutexType, Args... >::disconnectFree()
+inline void EventStorage< ImplT, MutexType, Args... >::disconnectFree()
 {
 	HandlerType target;
 	if constexpr ( detail::FunctionArity_v< decltype( Func ) > == sizeof...( Args ) )
@@ -1144,47 +1133,25 @@ inline void EventStorage< MutexType, Args... >::disconnectFree()
 		target = HandlerType::template createPartial< Func >();
 	}
 
-	std::vector< GenData > toDisconnect;
-	{
-		platform::LockGuard< MutexType > lock( _impl->mutex );
-		for ( uint32_t i = 0; i < static_cast< uint32_t >( _impl->handlers.size() ); ++i )
-		{
-			auto& entry = _impl->handlers[ i ];
-			if ( entry.flags.isActive() && entry.handler == target )
-			{
-				toDisconnect.emplace_back( i, _impl->handlers[ i ].generation );
-				break;  // remove one connection; leave any duplicates in place
-			}
-		}
-	}
+	auto toDisconnect = _impl->findFirstMatch(
+		[ & ]( const HandlerType& handler ) { return handler == target; } );
 	_impl->disconnectHandlers( toDisconnect );
 }
 
-template< typename MutexType, typename... Args >
-inline void EventStorage< MutexType, Args... >::disconnectFree(
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline void EventStorage< ImplT, MutexType, Args... >::disconnectFree(
 	void (*func)( Args... ) )
 {
 	const HandlerType target = HandlerType::create( func );
 
-	std::vector< GenData > toDisconnect;
-	{
-		platform::LockGuard< MutexType > lock( _impl->mutex );
-		for ( uint32_t i = 0; i < static_cast< uint32_t >( _impl->handlers.size() ); ++i )
-		{
-			auto& entry = _impl->handlers[ i ];
-			if ( entry.flags.isActive() && entry.handler == target )
-			{
-				toDisconnect.emplace_back( i, _impl->handlers[ i ].generation );
-				break;  // remove one connection; leave any duplicates in place
-			}
-		}
-	}
+	auto toDisconnect = _impl->findFirstMatch(
+		[ & ]( const HandlerType& handler ) { return handler == target; } );
 	_impl->disconnectHandlers( toDisconnect );
 }
 
-template< typename MutexType, typename... Args >
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
 template< typename T, typename... MethodArgs >
-inline void EventStorage< MutexType, Args... >::disconnect( T& receiver, void ( T::*method )( MethodArgs... ) )
+inline void EventStorage< ImplT, MutexType, Args... >::disconnect( T& receiver, void ( T::*method )( MethodArgs... ) )
 {
 	static_assert( sizeof...( MethodArgs ) <= sizeof...( Args ),
 		"disconnect: method requests more arguments than this event provides" );
@@ -1195,32 +1162,18 @@ inline void EventStorage< MutexType, Args... >::disconnect( T& receiver, void ( 
 	// path allocates nothing
 	using Invoker = detail::PmfInvoker< void ( Args... ), T, MethodArgs... >;
 
-	std::vector< GenData > toDisconnect;
-	{
-		platform::LockGuard< MutexType > lock( _impl->mutex );
-		for ( uint32_t i = 0; i < static_cast< uint32_t >( _impl->handlers.size() ); ++i )
-		{
-			auto& entry = _impl->handlers[ i ];
-			if ( ! entry.flags.isActive() )
-			{
-				continue;
-			}
-
-			const Invoker* candidate = entry.handler.template targetAs< Invoker >();
-			if ( candidate
+	auto toDisconnect = _impl->findFirstMatch(
+		[ & ]( const HandlerType& handler ) {
+			const Invoker* candidate = handler.template targetAs< Invoker >();
+			return candidate
 				&& candidate->_receiver == &receiver
-				&& candidate->_method == method )
-			{
-				toDisconnect.emplace_back( i, _impl->handlers[ i ].generation );
-				break;  // remove one connection; leave any duplicates in place
-			}
-		}
-	}
+				&& candidate->_method == method;
+		} );
 	_impl->disconnectHandlers( toDisconnect );
 }
 
-template< typename MutexType, typename... Args >
-inline void EventStorage< MutexType, Args... >::disconnectAll()
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline void EventStorage< ImplT, MutexType, Args... >::disconnectAll()
 {
 	platform::LockGuard< MutexType > lock( _impl->mutex );
 	_impl->preLockDisconnectAll();
@@ -1231,8 +1184,8 @@ inline void EventStorage< MutexType, Args... >::disconnectAll()
 // connectImpl
 // ===========================================================================
 
-template< typename MutexType, typename... Args >
-inline Connection EventStorage< MutexType, Args... >::connectImpl(
+template< template< typename, typename... > class ImplT, typename MutexType, typename... Args >
+inline Connection EventStorage< ImplT, MutexType, Args... >::connectImpl(
 	HandlerType&& handler,
 	Trackable* tracker,
 	ConnectionType type,

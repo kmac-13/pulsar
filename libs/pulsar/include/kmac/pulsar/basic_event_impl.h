@@ -61,7 +61,7 @@ template< typename MutexType, typename... Args > class BasicEvent;
  * @tparam Args the event argument types
  */
 template< typename MutexType, typename... Args >
-struct EventImpl : EventImplBase
+struct BasicEventImpl : EventImplBase
 {
 	using HandlerType = Callable< void( Args... ) >;
 	using HandlerEntryType = HandlerEntry< Args... >;
@@ -377,7 +377,7 @@ private:
 // ===========================================================================
 
 template< typename MutexType, typename... Args >
-inline bool EventImpl< MutexType, Args... >::isBlocked() const noexcept
+inline bool BasicEventImpl< MutexType, Args... >::isBlocked() const noexcept
 {
 	if constexpr ( std::is_same_v< MutexType, platform::NullMutex > )
 	{
@@ -390,7 +390,7 @@ inline bool EventImpl< MutexType, Args... >::isBlocked() const noexcept
 }
 
 template< typename MutexType, typename... Args >
-inline void EventImpl< MutexType, Args... >::block() noexcept
+inline void BasicEventImpl< MutexType, Args... >::block() noexcept
 {
 	if constexpr ( std::is_same_v< MutexType, platform::NullMutex > )
 	{
@@ -403,7 +403,7 @@ inline void EventImpl< MutexType, Args... >::block() noexcept
 }
 
 template< typename MutexType, typename... Args >
-inline void EventImpl< MutexType, Args... >::unblock() noexcept
+inline void BasicEventImpl< MutexType, Args... >::unblock() noexcept
 {
 	if constexpr ( std::is_same_v< MutexType, platform::NullMutex > )
 	{
@@ -428,7 +428,7 @@ inline void EventImpl< MutexType, Args... >::unblock() noexcept
 // ===========================================================================
 
 template< typename MutexType, typename... Args >
-bool EventImpl< MutexType, Args... >::isHandlerConnected( uint32_t index, uint32_t generation ) const
+bool BasicEventImpl< MutexType, Args... >::isHandlerConnected( uint32_t index, uint32_t generation ) const
 {
 	if constexpr ( detail::HasLockShared_v< MutexType > )
 	{
@@ -443,7 +443,7 @@ bool EventImpl< MutexType, Args... >::isHandlerConnected( uint32_t index, uint32
 }
 
 template< typename MutexType, typename... Args >
-void EventImpl< MutexType, Args... >::disconnectHandler( uint32_t index, uint32_t generation )
+void BasicEventImpl< MutexType, Args... >::disconnectHandler( uint32_t index, uint32_t generation )
 {
 	platform::LockGuard< MutexType > lock( mutex );
 
@@ -456,7 +456,7 @@ void EventImpl< MutexType, Args... >::disconnectHandler( uint32_t index, uint32_
 }
 
 template< typename MutexType, typename... Args >
-void EventImpl< MutexType, Args... >::disconnectHandlers( const std::vector< GenData >& entries )
+void BasicEventImpl< MutexType, Args... >::disconnectHandlers( const std::vector< GenData >& entries )
 {
 	platform::LockGuard< MutexType > lock( mutex );
 
@@ -472,7 +472,7 @@ void EventImpl< MutexType, Args... >::disconnectHandlers( const std::vector< Gen
 }
 
 template< typename MutexType, typename... Args >
-bool EventImpl< MutexType, Args... >::isHandlerBlocked( uint32_t index, uint32_t generation ) const
+bool BasicEventImpl< MutexType, Args... >::isHandlerBlocked( uint32_t index, uint32_t generation ) const
 {
 	if constexpr ( detail::HasLockShared_v< MutexType > )
 	{
@@ -495,7 +495,7 @@ bool EventImpl< MutexType, Args... >::isHandlerBlocked( uint32_t index, uint32_t
 }
 
 template< typename MutexType, typename... Args >
-void EventImpl< MutexType, Args... >::blockHandler( uint32_t index, uint32_t generation )
+void BasicEventImpl< MutexType, Args... >::blockHandler( uint32_t index, uint32_t generation )
 {
 	platform::LockGuard< MutexType > lock( mutex );
 	if ( ! isSlotLive( index, generation ) )
@@ -506,7 +506,7 @@ void EventImpl< MutexType, Args... >::blockHandler( uint32_t index, uint32_t gen
 }
 
 template< typename MutexType, typename... Args >
-void EventImpl< MutexType, Args... >::unblockHandler( uint32_t index, uint32_t generation )
+void BasicEventImpl< MutexType, Args... >::unblockHandler( uint32_t index, uint32_t generation )
 {
 	platform::LockGuard< MutexType > lock( mutex );
 	if ( ! isSlotLive( index, generation ) )
@@ -517,7 +517,7 @@ void EventImpl< MutexType, Args... >::unblockHandler( uint32_t index, uint32_t g
 }
 
 template< typename MutexType, typename... Args >
-void EventImpl< MutexType, Args... >::updateSenderLoop( EventLoop* loop )
+void BasicEventImpl< MutexType, Args... >::updateSenderLoop( EventLoop* loop )
 {
 	platform::LockGuard< MutexType > lock( mutex );
 	uint32_t count = 0;
@@ -543,7 +543,7 @@ void EventImpl< MutexType, Args... >::updateSenderLoop( EventLoop* loop )
 }
 
 template< typename MutexType, typename... Args >
-void EventImpl< MutexType, Args... >::updateHandlerLoop( uint32_t index, uint32_t generation, EventLoop* loop )
+void BasicEventImpl< MutexType, Args... >::updateHandlerLoop( uint32_t index, uint32_t generation, EventLoop* loop )
 {
 	platform::LockGuard< MutexType > lock( mutex );
 
@@ -581,11 +581,11 @@ void EventImpl< MutexType, Args... >::updateHandlerLoop( uint32_t index, uint32_
 }
 
 // ---------------------------------------------------------------------------
-// EventImpl::invokeDeferred and dispatch
+// BasicEventImpl::invokeDeferred and dispatch
 // ---------------------------------------------------------------------------
 
 template< typename MutexType, typename... Args >
-void EventImpl< MutexType, Args... >::invokeDeferred(
+void BasicEventImpl< MutexType, Args... >::invokeDeferred(
 	uint32_t index,
 	uint32_t generation,
 	const std::shared_ptr< void >& args )
@@ -640,7 +640,7 @@ void EventImpl< MutexType, Args... >::invokeDeferred(
 }
 
 template< typename MutexType, typename... Args >
-uint32_t EventImpl< MutexType, Args... >::addConnection(
+uint32_t BasicEventImpl< MutexType, Args... >::addConnection(
 	HandlerType&& handler, uint64_t tag, uint16_t priority,
 	ConnectionType declaredType, ResolvedConnectionType resolved,
 	EventLoop* receiverLoop, bool hasOwner, bool isSingleShot,
@@ -724,7 +724,7 @@ uint32_t EventImpl< MutexType, Args... >::addConnection(
 
 // TODO: break this up into smaller methods
 template< typename MutexType, typename... Args >
-void EventImpl< MutexType, Args... >::dispatch( Args... args )
+void BasicEventImpl< MutexType, Args... >::dispatch( Args... args )
 {
 	using Task = EventLoop::Task;
 	using ArgsCapture = std::tuple< std::decay_t< Args >... >;
@@ -906,7 +906,7 @@ void EventImpl< MutexType, Args... >::dispatch( Args... args )
 }
 
 template< typename MutexType, typename... Args >
-void EventImpl< MutexType, Args... >::preLockDisconnectAll()
+void BasicEventImpl< MutexType, Args... >::preLockDisconnectAll()
 {
 	if ( triggerDepth == 0 )
 	{
@@ -954,7 +954,7 @@ void EventImpl< MutexType, Args... >::preLockDisconnectAll()
 
 template< typename MutexType, typename... Args >
 template< typename MatchFn >
-std::vector< GenData > EventImpl< MutexType, Args... >::findFirstMatch( MatchFn&& matches ) const
+std::vector< GenData > BasicEventImpl< MutexType, Args... >::findFirstMatch( MatchFn&& matches ) const
 {
 	std::vector< GenData > result;
 	platform::LockGuard< MutexType > lock( mutex );
@@ -974,7 +974,7 @@ std::vector< GenData > EventImpl< MutexType, Args... >::findFirstMatch( MatchFn&
 // ===========================================================================
 
 template< typename MutexType, typename... Args >
-bool EventImpl< MutexType, Args... >::isSlotLive( uint32_t slot, uint32_t generation ) const
+bool BasicEventImpl< MutexType, Args... >::isSlotLive( uint32_t slot, uint32_t generation ) const
 {
 	return slot < static_cast< uint32_t >( handlers.size() )
 		&& handlers[ slot ].generation == generation
@@ -982,7 +982,7 @@ bool EventImpl< MutexType, Args... >::isSlotLive( uint32_t slot, uint32_t genera
 }
 
 template< typename MutexType, typename... Args >
-void EventImpl< MutexType, Args... >::disconnectSlotLocked( uint32_t slot )
+void BasicEventImpl< MutexType, Args... >::disconnectSlotLocked( uint32_t slot )
 {
 	HandlerEntryType& entry = handlers[ slot ];
 
@@ -1042,7 +1042,7 @@ void EventImpl< MutexType, Args... >::disconnectSlotLocked( uint32_t slot )
 }
 
 template< typename MutexType, typename... Args >
-void EventImpl< MutexType, Args... >::orderInsert( uint32_t slot )
+void BasicEventImpl< MutexType, Args... >::orderInsert( uint32_t slot )
 {
 	const uint16_t p = handlers[ slot ].priority;
 	auto it = std::partition_point( order.begin(), order.end(),
@@ -1054,7 +1054,7 @@ void EventImpl< MutexType, Args... >::orderInsert( uint32_t slot )
 }
 
 template< typename MutexType, typename... Args >
-void EventImpl< MutexType, Args... >::orderRemove( uint32_t slot )
+void BasicEventImpl< MutexType, Args... >::orderRemove( uint32_t slot )
 {
 	auto it = std::find( order.begin(), order.end(), slot );
 	if ( it != order.end() )
@@ -1064,7 +1064,7 @@ void EventImpl< MutexType, Args... >::orderRemove( uint32_t slot )
 }
 
 template< typename MutexType, typename... Args >
-void EventImpl< MutexType, Args... >::rebuildOrder()
+void BasicEventImpl< MutexType, Args... >::rebuildOrder()
 {
 	order.clear();
 	if ( priorityConnCount == 0 )
@@ -1089,7 +1089,7 @@ void EventImpl< MutexType, Args... >::rebuildOrder()
 }
 
 template< typename MutexType, typename... Args >
-void EventImpl< MutexType, Args... >::activateOrdering( uint32_t slot, uint16_t priority )
+void BasicEventImpl< MutexType, Args... >::activateOrdering( uint32_t slot, uint16_t priority )
 {
 	const bool wasActive = ( priorityConnCount > 0 );
 	if ( priority != 0 )
@@ -1109,7 +1109,7 @@ void EventImpl< MutexType, Args... >::activateOrdering( uint32_t slot, uint16_t 
 }
 
 template< typename MutexType, typename... Args >
-void EventImpl< MutexType, Args... >::reconcileAfterTrigger()
+void BasicEventImpl< MutexType, Args... >::reconcileAfterTrigger()
 {
 	if ( ! hadReentrantActivity )
 	{
@@ -1136,7 +1136,7 @@ void EventImpl< MutexType, Args... >::reconcileAfterTrigger()
 }
 
 template< typename MutexType, typename... Args >
-void EventImpl< MutexType, Args... >::recomputeOrdering()
+void BasicEventImpl< MutexType, Args... >::recomputeOrdering()
 {
 	priorityConnCount = 0;
 	for ( uint32_t s = 0; s < static_cast< uint32_t >( handlers.size() ); ++s )

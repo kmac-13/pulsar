@@ -46,6 +46,7 @@
  * @see RecordingStatistics for the statistics snapshot type
  */
 
+#include <kmac/pulsar/basic_event_impl.h>
 #include <kmac/pulsar/event_storage.h>
 
 #include "event_recorder.h"
@@ -83,9 +84,9 @@ struct RecordingStatistics
  * @tparam Args argument types forwarded to connected handlers
  */
 template< typename MutexType, typename... Args >
-class BasicRecordableEvent : public EventStorage< kmac::pulsar::EventImpl, MutexType, Args... >
+class BasicRecordableEvent : public EventStorage< kmac::pulsar::BasicEventImpl, MutexType, Args... >
 {
-	using Base = EventStorage< kmac::pulsar::EventImpl, MutexType, Args... >;
+	using Base = EventStorage< kmac::pulsar::BasicEventImpl, MutexType, Args... >;
 
 private:
 	std::atomic< bool > _statisticsEnabled { false };

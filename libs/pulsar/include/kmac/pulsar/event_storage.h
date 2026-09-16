@@ -64,10 +64,8 @@
 #include "connection.h"
 #include "connection_type.h"
 #include "event_detail.h"
-#include "event_impl.h"
 #include "event_impl_base.h"
 #include "event_loop.h"
-#include "gen_data.h"
 #include "handler_entry.h"
 #include "trackable.h"
 

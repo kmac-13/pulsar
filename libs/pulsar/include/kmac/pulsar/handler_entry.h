@@ -26,11 +26,11 @@
 
 #include <cstdint>
 
-// Forward declaration - full definition in event_loop.h
-namespace kmac { namespace pulsar { class EventLoop; } }
-
 namespace kmac {
 namespace pulsar {
+
+// Forward declaration - full definition in event_loop.h
+class EventLoop;
 
 /**
  * @brief One handler instance inside an EventImpl's dense storage array.

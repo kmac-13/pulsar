@@ -29,6 +29,7 @@
  * event.connect( receiver, method );                                  // defaults
  * event.connect( receiver, method, ConnectionType::Direct );          // type only
  * event.connect( receiver, method, ConnectionType::Auto, { 5 } );     // priority only
+ * event.connect( receiver, method, ConnectionType::Auto, 5 );         // implicit, priority only
  * event.connect( receiver, method, { 5 } );                           // same - ConnParams-first overload
  * event.connect( receiver, method, { pred } );                        // conditional, Receiver context
  * event.connect( receiver, method, { pred, PredicateContext::Sender } );
@@ -47,6 +48,13 @@
  * MutexType) spelled out at all:
  * event.connect( receiver, method, event.params( pred ).prio( 5 ).once() );
  * @endcode
+ *
+ * @note Single-shot connections cannot be established through implicit or
+ * brace initialization due to ambiguity with the uint32_t constructor
+ * overload.  Attempting to mark the uint32_t constructor explicit and/or
+ * deleting a bool constructor can result in compilation errors.  For these
+ * reasons, single-shot connections require calling `once()` on an instance
+ * of ConnParams.
  */
 
 #include "callable.h"

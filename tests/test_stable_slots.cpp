@@ -42,7 +42,7 @@ TYPED_TEST( StableSlots, PriorityActivatesAndRevertsToFastPath )
 	// a non-default priority activates the ordered path
 	order.clear();
 	auto hi = ev.connectLambda( [ &order ]( int ) { order.push_back( 9 ); },
-		pulsar::ConnectionType::Auto, ev.params().prio( 9 ) );
+		pulsar::ConnectionType::Auto, 9 );
 	ev( 0 );
 	EXPECT_EQ( order, ( std::vector< int >{ 9, 1, 2 } ) );
 

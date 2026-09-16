@@ -131,19 +131,19 @@ TEST( BlockGuard, BlockDepthTypeIsConditionalOnMutexType )
 {
 	static_assert(
 		std::is_same_v<
-			pulsar::EventImpl< pulsar::platform::NullMutex, int >::BlockDepthType,
+			pulsar::BasicEventImpl< pulsar::platform::NullMutex, int >::BlockDepthType,
 			unsigned int >,
 		"SingleThreadedEvent (NullMutex) should use a plain unsigned int blockDepth" );
 
 	static_assert(
 		std::is_same_v<
-			pulsar::EventImpl< pulsar::platform::RecursiveMutex, int >::BlockDepthType,
+			pulsar::BasicEventImpl< pulsar::platform::RecursiveMutex, int >::BlockDepthType,
 			pulsar::platform::Atomic< unsigned int > >,
 		"Event (RecursiveMutex) should use an atomic blockDepth" );
 
 	static_assert(
 		std::is_same_v<
-			pulsar::EventImpl< pulsar::platform::SharedMutex, int >::BlockDepthType,
+			pulsar::BasicEventImpl< pulsar::platform::SharedMutex, int >::BlockDepthType,
 			pulsar::platform::Atomic< unsigned int > >,
 		"SharedEvent (SharedMutex) should use an atomic blockDepth" );
 

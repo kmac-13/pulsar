@@ -70,6 +70,28 @@ private:
 	platform::Mutex _mutex;
 
 	/**
+	 * @brief Bumped every time `_trackedConnections` is mutated
+	 * (trackConnection()'s erase+push_back, disconnectAll()'s swap,
+	 * extractConnectionsTo()'s erase).  Always read/written under `_mutex`,
+	 * so it is a plain counter, not atomic.
+	 *
+	 * trackConnection() snapshots this alongside `_trackedConnections` while
+	 * unlocked, then compares on reacquire: an unchanged version means
+	 * nothing else touched the list in the interim, so the snapshot's
+	 * positions still correspond 1:1 with the real list and dead entries
+	 * can be erased by position - O(n).  A changed version means some other
+	 * call mutated the list while we were unlocked (positions may have
+	 * shifted), so we fall back to owner_before()-based identity matching
+	 * instead - O(n*m).  This only elides the erase step's matching cost;
+	 * it does NOT elide the isHandlerConnected() liveness scan itself,
+	 * which trackConnection() still runs every call - a remote event
+	 * disconnecting one of our tracked slots never notifies this Trackable,
+	 * so staleness can only be discovered by asking, regardless of whether
+	 * our own list changed.
+	 */
+	uint64_t _connectionsVersion { 0 };
+
+	/**
 	 * @brief Source of fresh migration tags, one per Trackable rather than
 	 * one per connection.  Starts at 1 so 0 remains reserved as the "no
 	 * particular receiver" sentinel used elsewhere (e.g. EventLoop::post()'s
@@ -192,6 +214,7 @@ inline void Trackable::disconnectAll()
 	{
 		std::lock_guard< platform::Mutex > lock( _mutex );
 		snapshot.swap( _trackedConnections );
+		++_connectionsVersion;
 	}
 
 	// one disconnectHandler call per connection - each acquires the event
@@ -288,14 +311,19 @@ inline void Trackable::trackConnection(
 	// observably empty except during disconnectAll()'s own drain - see
 	// trackable.h's file docs for why that matters
 	std::vector< TrackedConnection > snapshot;
+	uint64_t snapshotVersion;
 	{
 		std::lock_guard< platform::Mutex > lock( _mutex );
 		snapshot = _trackedConnections;
+		snapshotVersion = _connectionsVersion;
 	}
 
 	// determine which snapshot entries are dead without holding _mutex, so
 	// we never call into an EventImpl mutex while holding _mutex (isHandlerConnected()
-	// acquires the event's own mutex for EventImpl-backed events)
+	// acquires the event's own mutex for EventImpl-backed events) - this scan
+	// is unavoidable on every call regardless of the fast/slow path below: a
+	// remote event disconnecting one of our tracked slots never notifies
+	// this Trackable, so staleness can only be discovered by asking
 	std::vector< bool > isDead( snapshot.size() );
 	for ( size_t i = 0; i < snapshot.size(); ++i )
 	{
@@ -303,32 +331,59 @@ inline void Trackable::trackConnection(
 		isDead[ i ] = ! entryImpl || ! entryImpl->isHandlerConnected( snapshot[ i ].index, snapshot[ i ].generation );
 	}
 
-	// reacquire _mutex and erase only the confirmed-dead entries from the
-	// *real* list, matched by identity rather than position - the real list
-	// may have changed in the interim (another thread could have added or
-	// pruned connections), which is fine since owner_before()-based identity
-	// matching still finds the same entries even if their index shifted
+	// reacquire _mutex and erase the confirmed-dead entries from the *real*
+	// list, then add the new connection
 	std::lock_guard< platform::Mutex > lock( _mutex );
-	_trackedConnections.erase(
-		std::remove_if( _trackedConnections.begin(), _trackedConnections.end(),
-			[ &snapshot, &isDead ]( const TrackedConnection& tcon ) {
-				for ( size_t i = 0; i < snapshot.size(); ++i )
+
+	if ( _connectionsVersion == snapshotVersion )
+	{
+		// fast path: nothing else touched _trackedConnections while we were
+		// unlocked (disconnectAll(), extractConnectionsTo(), or another
+		// thread's trackConnection() would each have bumped the version), so
+		// the real list is still byte-identical to snapshot and isDead[ i ]
+		// corresponds directly to _trackedConnections[ i ] by position -
+		// O(n) erase, no identity matching needed
+		size_t writeIndex = 0;
+		for ( size_t i = 0; i < _trackedConnections.size(); ++i )
+		{
+			if ( ! isDead[ i ] )
+			{
+				if ( writeIndex != i )
 				{
-					if ( isDead[ i ]
-						&& ! tcon.impl.owner_before( snapshot[ i ].impl )
-						&& ! snapshot[ i ].impl.owner_before( tcon.impl )
-						&& tcon.index == snapshot[ i ].index
-						&& tcon.generation == snapshot[ i ].generation )
-					{
-						return true;
-					}
+					_trackedConnections[ writeIndex ] = std::move( _trackedConnections[ i ] );
 				}
-				return false;
-			} ),
-		_trackedConnections.end() );
+				++writeIndex;
+			}
+		}
+		_trackedConnections.resize( writeIndex );
+	}
+	else
+	{
+		// slow path: the list changed under us (concurrent mutation) -
+		// positions are no longer trustworthy, so match by identity instead,
+		// same O(n*m) approach as before this counter existed
+		_trackedConnections.erase(
+			std::remove_if( _trackedConnections.begin(), _trackedConnections.end(),
+				[ &snapshot, &isDead ]( const TrackedConnection& tcon ) {
+					for ( size_t i = 0; i < snapshot.size(); ++i )
+					{
+						if ( isDead[ i ]
+							&& ! tcon.impl.owner_before( snapshot[ i ].impl )
+							&& ! snapshot[ i ].impl.owner_before( tcon.impl )
+							&& tcon.index == snapshot[ i ].index
+							&& tcon.generation == snapshot[ i ].generation )
+						{
+							return true;
+						}
+					}
+					return false;
+				} ),
+			_trackedConnections.end() );
+	}
 
 	// add the new connection
 	_trackedConnections.push_back( { std::move( impl ), index, static_cast< uint16_t >( generation ), 0 } );
+	++_connectionsVersion;
 }
 
 inline std::vector< GenData > Trackable::extractConnectionsTo( EventImplBase* target )
@@ -347,6 +402,7 @@ inline std::vector< GenData > Trackable::extractConnectionsTo( EventImplBase* ta
 				return false;
 			} ),
 		_trackedConnections.end() );
+	++_connectionsVersion;
 
 	return result;
 }

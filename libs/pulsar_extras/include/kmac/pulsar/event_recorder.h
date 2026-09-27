@@ -1,3 +1,4 @@
+#pragma once
 #ifndef KMAC_PULSAR_EVENT_RECORDER_H
 #define KMAC_PULSAR_EVENT_RECORDER_H
 
@@ -5,20 +6,27 @@
  * @file event_recorder.h
  * @brief Capture, replay, and export triggered events.
  *
- * EventRecorder is the recording subsystem used by RecordableEvent.  It can
- * also be used standalone by calling setEvent() to attach it to any Event.
+ * EventRecorder is the recording subsystem used by BasicRecordableEvent.
+ * It stores a sequence of EventRecord entries (arguments + timestamps) and
+ * provides replay, export, and timing-analysis capabilities.
  *
  * Features:
- * - start / pause / resume / stop recording
- * - optional bounded-queue mode (keep only the last N emissions)
- * - replay at original timing, scaled speed, or instant
- * - export to CSV for offline analysis
- * - timing statistics (min/max/avg inter-emission intervals)
+ *   - start / pause / resume / stop recording
+ *   - optional bounded-queue mode (keep only the last N emissions)
+ *   - replay at original timing, scaled speed, or instant
+ *   - range-limited replay
+ *   - export to CSV for offline analysis
+ *   - timing statistics (min/max/avg inter-emission intervals)
  *
  * All public methods are thread-safe.
  *
+ * Replay is decoupled from any specific event type: a replay target is
+ * supplied as a Callable<void(Args...)> via setReplayTarget().
+ * BasicRecordableEvent sets this up automatically in its constructor, so
+ * manual wiring is only required when using EventRecorder standalone.
+ *
  * @code
- * pulsar::RecordableEvent< float > reading { this };
+ * RecordableEvent< float > reading { this };
  *
  * reading.recorder().startRecording( 100 );   // keep last 100 emissions
  * // ... run sensor for a while ...
@@ -29,10 +37,12 @@
  */
 
 #include <kmac/pulsar/pulsar_fwd.h>
+#include <kmac/pulsar/callable.h>
 
 #include <chrono>
 #include <deque>
 #include <fstream>
+
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
@@ -43,15 +53,15 @@ namespace kmac {
 namespace pulsar {
 
 /**
- * @brief A single captured event trigger, arguments plus timing information.
+ * @brief A single captured event trigger: arguments plus timing information.
  *
- * @tparam Args the argument types of the associated Event
+ * @tparam Args the argument types of the associated event
  */
 template< typename... Args >
 struct EventRecord
 {
-	std::tuple< Args... > args;                       ///< the event arguments
-	std::chrono::steady_clock::time_point timestamp;  ///< absolute wall-clock time of the event trigger
+	std::tuple< Args... > args;                       ///< captured argument values
+	std::chrono::steady_clock::time_point timestamp;  ///< absolute wall-clock time of the trigger
 	std::chrono::nanoseconds relativeTime;            ///< time elapsed since recording started
 
 	/**
@@ -61,14 +71,17 @@ struct EventRecord
 	 * @param ts absolute timestamp
 	 * @param rt time since recording start
 	 */
-	EventRecord( Args... arguments, std::chrono::steady_clock::time_point ts, std::chrono::nanoseconds rt );
+	EventRecord(
+		Args... arguments,
+		std::chrono::steady_clock::time_point ts,
+		std::chrono::nanoseconds rt );
 };
 
 /**
  * @brief Summary of inter-emission timing.
  *
- * All durations are nanoseconds, maningful only when at least two
- * emissions have been recorded.
+ * All durations are in nanoseconds and are meaningful only when at least
+ * two emissions have been recorded.
  */
 struct TimingStats
 {
@@ -82,13 +95,15 @@ struct TimingStats
 /**
  * @brief Records, replays, and exports event triggers.
  *
- * @tparam Args the argument types of the Event being recorded
+ * @tparam Args the argument types of the event being recorded
  */
 template< typename... Args >
 class EventRecorder
 {
 private:
-	Event< Args... >* _event;
+	/// replay target set by BasicRecordableEvent or setReplayTarget(); nullptr = no replay
+	Callable< void( Args... ) > _replayTarget;
+
 	RecordingMode _mode;
 	std::size_t _maxRecordings;                                 ///< 0 = unlimited
 	std::chrono::steady_clock::time_point _recordingStartTime;
@@ -97,20 +112,26 @@ private:
 
 public:
 	/**
-	 * @brief Construct a recorder, optionally associated with an event.
+	 * @brief Construct a recorder with no replay target.
 	 *
-	 * @param event Event to record and replay, may be nullptr; set later via setEvent()
+	 * Call setReplayTarget() or use BasicRecordableEvent (which wires the
+	 * target automatically) before calling any replay method.
 	 */
-	explicit EventRecorder( Event< Args... >* event = nullptr );
+	EventRecorder();
 
 	/**
 	 * @brief Destructor - stops recording if active.
 	 */
 	~EventRecorder();
 
-	// ======================================================================
-	// Recording Control
-	// ======================================================================
+	EventRecorder( const EventRecorder& ) = delete;
+	EventRecorder& operator=( const EventRecorder& ) = delete;
+	EventRecorder( EventRecorder&& ) = delete;
+	EventRecorder& operator=( EventRecorder&& ) = delete;
+
+	// =========================================================================
+	// recording control
+	// =========================================================================
 
 	/**
 	 * @brief Returns true if recording is currently active (not paused or stopped).
@@ -130,16 +151,16 @@ public:
 	 * If recording was paused, it resumes without clearing (use
 	 * resumeRecording() to be explicit).
 	 *
-	 * @param maxRecordings maximum number of recordings to keep, when the limit is reached,
-	 * the oldest recording is discarded (bounded-queue behaviour); pass 0 for unlimited
+	 * @param maxRecordings maximum number of recordings to keep (bounded-queue
+	 *   behaviour); 0 means unlimited
 	 */
-	void startRecording( size_t maxRecordings = 0 );
+	void startRecording( std::size_t maxRecordings = 0 );
 
 	/**
 	 * @brief Temporarily suspend recording without discarding existing data.
 	 *
-	 * Only valid while recording.  Events triggered during a pause are not recorded.
-	 * Call resumeRecording() to continue.
+	 * Only valid while recording.  Events triggered during a pause are not
+	 * recorded.  Call resumeRecording() to continue.
 	 */
 	void pauseRecording();
 
@@ -158,19 +179,18 @@ public:
 	 */
 	void stopRecording();
 
-	// ======================================================================
-	// Recording Management
-	// ======================================================================
+	// =========================================================================
+	// recording management
+	// =========================================================================
 
 	/**
 	 * @brief Record one emission.
 	 *
-	 * Called automatically by RecordableEvent::triggerImpl() when recording
-	 * is active.  Can also be called manually on a standalone recorder.
+	 * Called automatically by BasicRecordableEvent::operator() when
+	 * recording is active.  Can also be called manually on a standalone
+	 * recorder.  Does nothing if not in Recording mode.
 	 *
-	 * Does nothing if not in Recording mode.
-	 *
-	 * @param args the argument values supplied during event trigger
+	 * @param args the argument values supplied during the event trigger
 	 */
 	void recordEmission( Args... args );
 
@@ -182,25 +202,23 @@ public:
 	/**
 	 * @brief Returns the number of recorded events.
 	 */
-	size_t recordingCount() const;
+	std::size_t recordingCount() const;
 
 	/**
-	 * @brief Return a copy of all recorded events.
-	 *
-	 * Thread-safe snapshot.
+	 * @brief Return a copy of all recorded events.  Thread-safe snapshot.
 	 */
 	std::deque< EventRecord< Args... > > getRecordings() const;
 
-	// ======================================================================
-	// Replay
-	// ======================================================================
+	// =========================================================================
+	// replay
+	// =========================================================================
 
 	/**
 	 * @brief Replay all recordings immediately (no timing delays).
 	 *
-	 * Triggers the associated event once per recording in original order.
+	 * Triggers the replay target once per recording in original order.
 	 *
-	 * @throws std::runtime_error if no event is associated
+	 * @throws std::runtime_error if no replay target has been set
 	 */
 	void replay();
 
@@ -210,19 +228,18 @@ public:
 	 * Blocks the calling thread between events to preserve the original
 	 * timing.
 	 *
-	 * @throws std::runtime_error if no event is associated
+	 * @throws std::runtime_error if no replay target has been set
 	 */
 	void replayWithTiming();
 
 	/**
 	 * @brief Replay recordings at a scaled speed.
 	 *
-	 * Delays are divided by @p speedMultiplier: values > 1.0 speed up
+	 * Delays are divided by `speedMultiplier`: values > 1.0 speed up
 	 * playback, values < 1.0 slow it down.
 	 *
 	 * @param speedMultiplier playback speed multiplier, must be > 0
-	 *
-	 * @throws std::runtime_error if no event is associated
+	 * @throws std::runtime_error if no replay target has been set
 	 * @throws std::invalid_argument if speedMultiplier <= 0
 	 */
 	void replayWithSpeed( double speedMultiplier );
@@ -232,14 +249,13 @@ public:
 	 *
 	 * @param startIdx inclusive start index (0-based)
 	 * @param endIdx exclusive end index, clamped to recordingCount()
-	 *
-	 * @throws std::runtime_error if no event is associated
+	 * @throws std::runtime_error if no replay target has been set
 	 */
-	void replayRange( size_t startIdx, size_t endIdx );
+	void replayRange( std::size_t startIdx, std::size_t endIdx );
 
-	// ======================================================================
-	// Analysis & Export
-	// ======================================================================
+	// =========================================================================
+	// analysis and export
+	// =========================================================================
 
 	/**
 	 * @brief Compute inter-emission timing statistics.
@@ -249,7 +265,7 @@ public:
 	TimingStats getTimingStats() const;
 
 	/**
-	 * @brief Print a human-readable listing of all recordings to @p out.
+	 * @brief Print a human-readable listing of all recordings to `out`.
 	 *
 	 * Each recording is shown with its index, relative time (+Xms), and
 	 * argument values.
@@ -269,40 +285,42 @@ public:
 	 */
 	void exportToCSV( const std::string& filename ) const;
 
+	// =========================================================================
+	// replay target
+	// =========================================================================
+
 	/**
-	 * @brief Associate this recorder with a different event.
+	 * @brief Set the callable invoked during replay.
 	 *
-	 * Useful when constructing a recorder standalone and later attaching it.
-	 * Does not clear existing recordings.
+	 * BasicRecordableEvent calls this automatically in its constructor.
+	 * Only required when using EventRecorder standalone.
 	 *
-	 * @param event new event to record and replay (may be nullptr to detach)
+	 * @param target callable that accepts Args...; pass {} to detach
 	 */
-	void setEvent( Event< Args... >* event );
+	void setReplayTarget( Callable< void( Args... ) > target );
 
 private:
-	// -------------------------------------------------------------------------
-	// Helpers for printing tuples
-	// -------------------------------------------------------------------------
-
-	template< typename OStream, typename Tuple, size_t... IndexSequence >
-	void printTupleImpl( OStream& out, const Tuple& t, std::index_sequence< IndexSequence... > ) const;
+	template< typename OStream, typename Tuple, std::size_t... Idx >
+	void printTupleImpl( OStream& out, const Tuple& t, std::index_sequence< Idx... > ) const;
 
 	template< typename OStream, typename Tuple >
 	void printTuple( OStream& out, const Tuple& t ) const;
 
-	template< size_t... IndexSequence >
-	std::string writeTupleCSVHeader( std::index_sequence< IndexSequence... > ) const;
+	template< std::size_t... Idx >
+	std::string writeTupleCSVHeader( std::index_sequence< Idx... > ) const;
 
-	template< typename Tuple, size_t... IndexSequence >
-	std::string writeTupleCSVImpl( const Tuple& t, std::index_sequence< IndexSequence... > ) const;
+	template< typename Tuple, std::size_t... Idx >
+	std::string writeTupleCSVImpl( const Tuple& t, std::index_sequence< Idx... > ) const;
 
 	template< typename Tuple >
 	std::string writeTupleCSV( const Tuple& t ) const;
 };
 
-/**
- * @brief Alias for users that prefer signal/emit terminology.
- */
+// =========================================================================
+// aliases
+// =========================================================================
+
+/** @brief Alias for users that prefer signal/emit terminology. */
 template< typename... Args >
 using SignalRecorder = EventRecorder< Args... >;
 
@@ -312,7 +330,7 @@ using SignalRecorder = EventRecorder< Args... >;
 //
 
 template< typename... Args >
-EventRecord< Args... >::EventRecord(
+inline EventRecord< Args... >::EventRecord(
 	Args... arguments,
 	std::chrono::steady_clock::time_point ts,
 	std::chrono::nanoseconds rt )
@@ -323,29 +341,41 @@ EventRecord< Args... >::EventRecord(
 }
 
 template< typename... Args >
-EventRecorder< Args... >::EventRecorder( Event< Args... >* event )
-	: _event( event )
-	, _mode( RecordingMode::Disabled )
+inline EventRecorder< Args... >::EventRecorder()
+	: _mode( RecordingMode::Disabled )
 	, _maxRecordings( 0 )
 	, _recordingStartTime( std::chrono::steady_clock::now() )
 {
 }
 
 template< typename... Args >
-EventRecorder< Args... >::~EventRecorder()
+inline EventRecorder< Args... >::~EventRecorder()
 {
 	stopRecording();
 }
 
 template< typename... Args >
-void EventRecorder< Args... >::startRecording( size_t maxRecordings )
+inline bool EventRecorder< Args... >::isRecording() const
+{
+	std::lock_guard< std::mutex > lock( _mutex );
+	return _mode == RecordingMode::Recording;
+}
+
+template< typename... Args >
+inline RecordingMode EventRecorder< Args... >::mode() const
+{
+	std::lock_guard< std::mutex > lock( _mutex );
+	return _mode;
+}
+
+template< typename... Args >
+inline void EventRecorder< Args... >::startRecording( std::size_t maxRecordings )
 {
 	std::lock_guard< std::mutex > lock( _mutex );
 
-	// check if already recording (no-op)
 	if ( _mode == RecordingMode::Recording )
 	{
-		return;
+		return;  // already recording - no-op
 	}
 
 	if ( _mode == RecordingMode::Disabled )
@@ -353,6 +383,7 @@ void EventRecorder< Args... >::startRecording( size_t maxRecordings )
 		// fresh start: clear any stale data from a previous session
 		_recordings.clear();
 	}
+	// if Paused, resume without clearing
 
 	_mode = RecordingMode::Recording;
 	_maxRecordings = maxRecordings;
@@ -360,7 +391,7 @@ void EventRecorder< Args... >::startRecording( size_t maxRecordings )
 }
 
 template< typename... Args >
-void EventRecorder< Args... >::pauseRecording()
+inline void EventRecorder< Args... >::pauseRecording()
 {
 	std::lock_guard< std::mutex > lock( _mutex );
 	if ( _mode == RecordingMode::Recording )
@@ -370,7 +401,7 @@ void EventRecorder< Args... >::pauseRecording()
 }
 
 template< typename... Args >
-void EventRecorder< Args... >::resumeRecording()
+inline void EventRecorder< Args... >::resumeRecording()
 {
 	std::lock_guard< std::mutex > lock( _mutex );
 	if ( _mode == RecordingMode::Paused )
@@ -380,28 +411,14 @@ void EventRecorder< Args... >::resumeRecording()
 }
 
 template< typename... Args >
-void EventRecorder< Args... >::stopRecording()
+inline void EventRecorder< Args... >::stopRecording()
 {
 	std::lock_guard< std::mutex > lock( _mutex );
 	_mode = RecordingMode::Disabled;
 }
 
 template< typename... Args >
-bool EventRecorder< Args... >::isRecording() const
-{
-	std::lock_guard< std::mutex > lock( _mutex );
-	return _mode == RecordingMode::Recording;
-}
-
-template< typename... Args >
-RecordingMode EventRecorder< Args... >::mode() const
-{
-	std::lock_guard< std::mutex > lock( _mutex );
-	return _mode;
-}
-
-template< typename... Args >
-void EventRecorder< Args... >::recordEmission( Args... args )
+inline void EventRecorder< Args... >::recordEmission( Args... args )
 {
 	std::lock_guard< std::mutex > lock( _mutex );
 
@@ -423,144 +440,125 @@ void EventRecorder< Args... >::recordEmission( Args... args )
 }
 
 template< typename... Args >
-void EventRecorder< Args... >::clearRecordings()
+inline void EventRecorder< Args... >::clearRecordings()
 {
 	std::lock_guard< std::mutex > lock( _mutex );
 	_recordings.clear();
 }
 
 template< typename... Args >
-std::size_t EventRecorder< Args... >::recordingCount() const
+inline std::size_t EventRecorder< Args... >::recordingCount() const
 {
 	std::lock_guard< std::mutex > lock( _mutex );
 	return _recordings.size();
 }
 
 template< typename... Args >
-std::deque< EventRecord< Args... > > EventRecorder< Args... >::getRecordings() const
+inline std::deque< EventRecord< Args... > > EventRecorder< Args... >::getRecordings() const
 {
 	std::lock_guard< std::mutex > lock( _mutex );
-	return _recordings;  // returns a copy
+	return _recordings;  // copy
 }
 
 template< typename... Args >
-void EventRecorder< Args... >::replay()
+inline void EventRecorder< Args... >::replay()
 {
-	if ( ! _event )
+	if ( ! _replayTarget )
 	{
-		throw std::runtime_error( "Cannot replay: no event associated" );
+		throw std::runtime_error( "cannot replay: no replay target set" );
 	}
 
-	// mutex protected
-	std::deque< EventRecord< Args... > > recordings = getRecordings();
-
-	for ( const auto& recording : recordings )
+	auto recordings = getRecordings();  // mutex-protected copy
+	for ( const auto& rec : recordings )
 	{
-		std::apply( [ this ]( Args... args ) {
-			( *_event )( std::forward< Args >( args )... );
-		}, recording.args );
+		std::apply( _replayTarget, rec.args );
 	}
 }
 
 template< typename... Args >
-void EventRecorder< Args... >::replayWithTiming()
+inline void EventRecorder< Args... >::replayWithTiming()
 {
-	if ( ! _event )
+	if ( ! _replayTarget )
 	{
-		throw std::runtime_error( "Cannot replay: no event associated" );
+		throw std::runtime_error( "cannot replay: no replay target set" );
 	}
 
-	// mutex protected
-	std::deque< EventRecord< Args... > > recordings = getRecordings();
-
+	auto recordings = getRecordings();
 	if ( recordings.empty() )
 	{
 		return;
 	}
 
 	auto startTime = std::chrono::steady_clock::now();
-
-	for ( const auto& recording : recordings )
+	for ( const auto& rec : recordings )
 	{
-		auto targetTime = startTime + recording.relativeTime;
+		auto targetTime = startTime + rec.relativeTime;
 		std::this_thread::sleep_until( targetTime );
-
-		std::apply( [ this ]( Args... args ) {
-			( *_event )( std::forward< Args >( args )... );
-		}, recording.args );
+		std::apply( _replayTarget, rec.args );
 	}
 }
 
 template< typename... Args >
-void EventRecorder< Args... >::replayWithSpeed( double speedMultiplier )
+inline void EventRecorder< Args... >::replayWithSpeed( double speedMultiplier )
 {
-	if ( ! _event )
+	if ( ! _replayTarget )
 	{
-		throw std::runtime_error( "Cannot replay: no event associated" );
+		throw std::runtime_error( "cannot replay: no replay target set" );
 	}
 
 	if ( speedMultiplier <= 0.0 )
 	{
-		throw std::invalid_argument( "Speed multiplier must be positive" );
+		throw std::invalid_argument( "speed multiplier must be positive" );
 	}
 
-	// mutex protected
-	std::deque< EventRecord< Args... > > recordings = getRecordings();
-
+	auto recordings = getRecordings();
 	if ( recordings.empty() )
 	{
 		return;
 	}
 
 	auto startTime = std::chrono::steady_clock::now();
-
-	for ( const auto& recording : recordings )
+	for ( const auto& rec : recordings )
 	{
-		auto scaledTime = std::chrono::duration_cast< std::chrono::nanoseconds >( recording.relativeTime / speedMultiplier );
-		auto targetTime = startTime + scaledTime;
-		std::this_thread::sleep_until( targetTime );
-
-		std::apply( [ this ]( Args... args ) {
-			( *_event )( std::forward< Args >( args )... );
-		}, recording.args );
+		auto scaledTime = std::chrono::duration_cast< std::chrono::nanoseconds >(
+			rec.relativeTime / speedMultiplier );
+		std::this_thread::sleep_until( startTime + scaledTime );
+		std::apply( _replayTarget, rec.args );
 	}
 }
 
 template< typename... Args >
-void EventRecorder< Args... >::replayRange( size_t startIdx, size_t endIdx )
+inline void EventRecorder< Args... >::replayRange( std::size_t startIdx, std::size_t endIdx )
 {
-	if ( ! _event )
+	if ( ! _replayTarget )
 	{
-		throw std::runtime_error( "Cannot replay: no event associated" );
+		throw std::runtime_error( "cannot replay: no replay target set" );
 	}
 
 	std::deque< EventRecord< Args... > > recordings;
 	{
 		std::lock_guard< std::mutex > lock( _mutex );
-
 		if ( endIdx > _recordings.size() )
 		{
 			endIdx = _recordings.size();
 		}
-
 		if ( startIdx >= endIdx )
 		{
 			return;
 		}
-
-		recordings.assign( _recordings.begin() + startIdx, _recordings.begin() + endIdx );
+		recordings.assign(
+			_recordings.begin() + static_cast< std::ptrdiff_t >( startIdx ),
+			_recordings.begin() + static_cast< std::ptrdiff_t >( endIdx ) );
 	}
 
-	for ( const auto& recording : recordings )
+	for ( const auto& rec : recordings )
 	{
-		std::apply( [ this ]( Args... args ) {
-			( *_event )( std::forward< Args >( args )... );
-		}, recording.args );
+		std::apply( _replayTarget, rec.args );
 	}
 }
 
 template< typename... Args >
-TimingStats EventRecorder< Args... >::getTimingStats() const
+inline TimingStats EventRecorder< Args... >::getTimingStats() const
 {
 	std::lock_guard< std::mutex > lock( _mutex );
 
@@ -586,11 +584,11 @@ TimingStats EventRecorder< Args... >::getTimingStats() const
 		return stats;
 	}
 
-	std::chrono::nanoseconds minInterval = std::chrono::nanoseconds::max();
-	std::chrono::nanoseconds maxInterval = std::chrono::nanoseconds::min();
-	std::chrono::nanoseconds totalInterval( 0 );
+	auto minInterval = std::chrono::nanoseconds::max();
+	auto maxInterval = std::chrono::nanoseconds::min();
+	auto totalInterval = std::chrono::nanoseconds( 0 );
 
-	for ( size_t i = 1; i < _recordings.size(); ++i )
+	for ( std::size_t i = 1; i < _recordings.size(); ++i )
 	{
 		auto interval = _recordings[ i ].relativeTime - _recordings[ i - 1 ].relativeTime;
 		minInterval = std::min( minInterval, interval );
@@ -600,14 +598,14 @@ TimingStats EventRecorder< Args... >::getTimingStats() const
 
 	stats.minInterval = minInterval;
 	stats.maxInterval = maxInterval;
-	stats.avgInterval = totalInterval / ( _recordings.size() - 1 );
+	stats.avgInterval = totalInterval / static_cast< long >( _recordings.size() - 1 );
 
 	return stats;
 }
 
 template< typename... Args >
 template< typename OStream >
-void EventRecorder< Args... >::dumpRecordings( OStream& out ) const
+inline void EventRecorder< Args... >::dumpRecordings( OStream& out ) const
 {
 	std::lock_guard< std::mutex > lock( _mutex );
 
@@ -620,7 +618,7 @@ void EventRecorder< Args... >::dumpRecordings( OStream& out ) const
 		return;
 	}
 
-	for ( size_t i = 0; i < _recordings.size(); ++i )
+	for ( std::size_t i = 0; i < _recordings.size(); ++i )
 	{
 		const auto& rec = _recordings[ i ];
 		auto ms = std::chrono::duration_cast< std::chrono::milliseconds >( rec.relativeTime );
@@ -634,27 +632,21 @@ void EventRecorder< Args... >::dumpRecordings( OStream& out ) const
 }
 
 template< typename... Args >
-void EventRecorder< Args... >::setEvent( Event< Args... >* event )
-{
-	_event = event;
-}
-
-template< typename... Args >
-void EventRecorder< Args... >::exportToCSV( const std::string& filename ) const
+inline void EventRecorder< Args... >::exportToCSV( const std::string& filename ) const
 {
 	std::lock_guard< std::mutex > lock( _mutex );
 
 	std::ofstream file( filename );
 	if ( ! file.is_open() )
 	{
-		throw std::runtime_error( "Failed to open file: " + filename );
+		throw std::runtime_error( "failed to open file: " + filename );
 	}
 
 	file << "Index,RelativeTime_ns,RelativeTime_ms";
 	file << writeTupleCSVHeader( std::index_sequence_for< Args... >{} );
 	file << "\n";
 
-	for ( size_t i = 0; i < _recordings.size(); ++i )
+	for ( std::size_t i = 0; i < _recordings.size(); ++i )
 	{
 		const auto& rec = _recordings[ i ];
 		auto ns = rec.relativeTime.count();
@@ -667,42 +659,56 @@ void EventRecorder< Args... >::exportToCSV( const std::string& filename ) const
 }
 
 template< typename... Args >
-template< typename OStream, typename Tuple, size_t... IndexSequence >
-void EventRecorder< Args... >::printTupleImpl( OStream& out, const Tuple& t, std::index_sequence< IndexSequence... > ) const
+inline void EventRecorder< Args... >::setReplayTarget(
+	Callable< void( Args... ) > target )
+{
+	_replayTarget = std::move( target );
+}
+
+// ---------------------------------------------------------------------------
+// private tuple helpers
+// ---------------------------------------------------------------------------
+
+template< typename... Args >
+template< typename OStream, typename Tuple, std::size_t... Idx >
+inline void EventRecorder< Args... >::printTupleImpl(
+	OStream& out, const Tuple& t, std::index_sequence< Idx... > ) const
 {
 	out << "(";
-	( ( out << ( IndexSequence == 0 ? "" : ", " ) << std::get< IndexSequence >( t ) ), ... );
+	( ( out << ( Idx == 0 ? "" : ", " ) << std::get< Idx >( t ) ), ... );
 	out << ")";
 }
 
 template< typename... Args >
 template< typename OStream, typename Tuple >
-void EventRecorder< Args... >::printTuple( OStream& out, const Tuple& t ) const
+inline void EventRecorder< Args... >::printTuple( OStream& out, const Tuple& t ) const
 {
 	printTupleImpl( out, t, std::make_index_sequence< std::tuple_size< Tuple >::value >{} );
 }
 
 template< typename... Args >
-template< size_t... IndexSequence >
-std::string EventRecorder< Args... >::writeTupleCSVHeader( std::index_sequence< IndexSequence... > ) const
+template< std::size_t... Idx >
+inline std::string EventRecorder< Args... >::writeTupleCSVHeader(
+	std::index_sequence< Idx... > ) const
 {
 	std::ostringstream oss;
-	( ( oss << ",Arg" << IndexSequence ), ... );
+	( ( oss << ",Arg" << Idx ), ... );
 	return oss.str();
 }
 
 template< typename... Args >
-template< typename Tuple, size_t... IndexSequence >
-std::string EventRecorder< Args... >::writeTupleCSVImpl( const Tuple& t, std::index_sequence< IndexSequence... > ) const
+template< typename Tuple, std::size_t... Idx >
+inline std::string EventRecorder< Args... >::writeTupleCSVImpl(
+	const Tuple& t, std::index_sequence< Idx... > ) const
 {
 	std::ostringstream oss;
-	( ( oss << "," << std::get< IndexSequence >( t ) ), ... );
+	( ( oss << "," << std::get< Idx >( t ) ), ... );
 	return oss.str();
 }
 
 template< typename... Args >
 template< typename Tuple >
-std::string EventRecorder< Args... >::writeTupleCSV( const Tuple& t ) const
+inline std::string EventRecorder< Args... >::writeTupleCSV( const Tuple& t ) const
 {
 	return writeTupleCSVImpl( t, std::make_index_sequence< std::tuple_size< Tuple >::value >{} );
 }

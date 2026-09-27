@@ -3,32 +3,41 @@
 // ---------------------------------------------------------------------------
 // Partial argument matching tests
 //
-// Verifies that handler methods accepting fewer arguments than the event
-// provides compile and receive the correct leading arguments.
+// Verifies that handler methods/functions accepting fewer arguments than an
+// event provides still compile and receive the correct leading arguments.
+// Partial matching is supported by the NTTP (non-type template parameter)
+// forms - connect<Method> and connectFree<Func> - and by the runtime
+// (non-NTTP) pointer-to-member-function form, connect(receiver, method).
+// ConnParams (.once(), {predicate}/.when(), .prio()) composes with partial
+// matching on these same forms rather than being separate connect method
+// names.  disconnect/disconnectFree reconstruct the same partial-or-exact
+// target that the matching connect call built, so a partial-arity
+// connection can be disconnected by name.
+//
+// Source holds four events of different arities, so parametrization is on
+// MutexType directly (BasicEvent<MutexType, Args...>) rather than a fixed
+// Event alias.  ConnectOncePartialArgs uses once(), which static_asserts
+// against SharedMutex, so it's split into its own suite restricted to
+// Event/SingleThreadedEvent; everything else is safe across all three.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
-class Source : public pulsar::Object
+namespace {
+
+template< typename MutexType >
+class Source : public pulsar::Trackable
 {
 public:
-	pulsar::Event< int > oneArg;
-	pulsar::Event< int, int > twoArgs;
-	pulsar::Event< int, int, int > threeArgs;
-	pulsar::Event< int, std::string > mixedArgs;
-
-	explicit Source()
-		: oneArg( this )
-		, twoArgs( this )
-		, threeArgs( this )
-		, mixedArgs( this )
-	{
-	}
+	pulsar::BasicEvent< MutexType, int > oneArg { this };
+	pulsar::BasicEvent< MutexType, int, int > twoArgs { this };
+	pulsar::BasicEvent< MutexType, int, int, int > threeArgs { this };
+	pulsar::BasicEvent< MutexType, int, std::string > mixedArgs { this };
 };
 
-class Sink : public pulsar::Object
+class Sink : public pulsar::Trackable
 {
 public:
 	int callCount = 0;
@@ -44,201 +53,186 @@ public:
 	void reset() { callCount = 0; lastA = -1; lastB = -1; lastStr.clear(); }
 };
 
-// ---------------------------------------------------------------------------
-// Exact match still works (regression)
-// ---------------------------------------------------------------------------
+} // namespace
 
-TEST( PartialArgs, ExactMatchOneArg )
-{
-	auto src = std::make_shared< Source >();
-	auto sink = std::make_shared< Sink >();
+template< typename MutexType >
+class PartialArgs : public ::testing::Test {};
 
-	src->oneArg.connect( sink, &Sink::onOne );
-	src->oneArg( 42 );
-
-	EXPECT_EQ( sink->callCount, 1 );
-	EXPECT_EQ( sink->lastA, 42 );
-}
-
-TEST( PartialArgs, ExactMatchTwoArgs )
-{
-	auto src = std::make_shared< Source >();
-	auto sink = std::make_shared< Sink >();
-
-	src->twoArgs.connect( sink, &Sink::onTwo );
-	src->twoArgs( 3, 7 );
-
-	EXPECT_EQ( sink->callCount, 1 );
-	EXPECT_EQ( sink->lastA, 3 );
-	EXPECT_EQ( sink->lastB, 7 );
-}
+using MutexTypes = ::testing::Types<
+	pulsar::platform::RecursiveMutex,
+	pulsar::platform::SharedMutex,
+	pulsar::platform::NullMutex >;
+TYPED_TEST_SUITE( PartialArgs, MutexTypes );
 
 // ---------------------------------------------------------------------------
-// Drop trailing args
+// Exact match via runtime (non-NTTP) connect()
 // ---------------------------------------------------------------------------
 
-TEST( PartialArgs, TwoArgEventOneArgHandler )
+TYPED_TEST( PartialArgs, ExactMatchOneArg )
 {
-	auto src = std::make_shared< Source >();
-	auto sink = std::make_shared< Sink >();
+	Source< TypeParam > src;
+	Sink sink;
 
-	// Event fires (int, int), handler takes (int) - second arg dropped
-	src->twoArgs.connect( sink, &Sink::onOne );
-	src->twoArgs( 10, 20 );
+	src.oneArg.connect( sink, &Sink::onOne );
+	src.oneArg( 42 );
 
-	EXPECT_EQ( sink->callCount, 1 );
-	EXPECT_EQ( sink->lastA, 10 );  // first arg received
+	EXPECT_EQ( sink.callCount, 1 );
+	EXPECT_EQ( sink.lastA, 42 );
 }
 
-TEST( PartialArgs, ThreeArgEventOneArgHandler )
+TYPED_TEST( PartialArgs, ExactMatchTwoArgs )
 {
-	auto src = std::make_shared< Source >();
-	auto sink = std::make_shared< Sink >();
+	Source< TypeParam > src;
+	Sink sink;
 
-	src->threeArgs.connect( sink, &Sink::onOne );
-	src->threeArgs( 5, 6, 7 );
+	src.twoArgs.connect( sink, &Sink::onTwo );
+	src.twoArgs( 3, 7 );
 
-	EXPECT_EQ( sink->callCount, 1 );
-	EXPECT_EQ( sink->lastA, 5 );
-}
-
-TEST( PartialArgs, ThreeArgEventTwoArgHandler )
-{
-	auto src = std::make_shared< Source >();
-	auto sink = std::make_shared< Sink >();
-
-	src->threeArgs.connect( sink, &Sink::onTwo );
-	src->threeArgs( 11, 22, 33 );
-
-	EXPECT_EQ( sink->callCount, 1 );
-	EXPECT_EQ( sink->lastA, 11 );
-	EXPECT_EQ( sink->lastB, 22 );
+	EXPECT_EQ( sink.callCount, 1 );
+	EXPECT_EQ( sink.lastA, 3 );
+	EXPECT_EQ( sink.lastB, 7 );
 }
 
 // ---------------------------------------------------------------------------
-// Drop all args
+// Partial arg (non-NTTP) connect()
 // ---------------------------------------------------------------------------
 
-TEST( PartialArgs, TwoArgEventZeroArgHandler )
+TYPED_TEST( PartialArgs, TwoArgEventOneArgHandler )
 {
-	auto src = std::make_shared< Source >();
-	auto sink = std::make_shared< Sink >();
+	Source< TypeParam > src;
+	Sink sink;
 
-	src->twoArgs.connect( sink, &Sink::onZero );
-	src->twoArgs( 99, 99 );
+	src.twoArgs.connect( sink, &Sink::onOne );
+	src.twoArgs( 10, 20 );
 
-	EXPECT_EQ( sink->callCount, 1 );
+	EXPECT_EQ( sink.callCount, 1 );
+	EXPECT_EQ( sink.lastA, 10 );
 }
 
-TEST( PartialArgs, ThreeArgEventZeroArgHandler )
+TYPED_TEST( PartialArgs, ThreeArgEventOneArgHandler )
 {
-	auto src  = std::make_shared< Source >();
-	auto sink = std::make_shared< Sink >();
+	Source< TypeParam > src;
+	Sink sink;
 
-	src->threeArgs.connect( sink, &Sink::onZero );
-	src->threeArgs( 1, 2, 3 );
+	src.threeArgs.connect( sink, &Sink::onOne );
+	src.threeArgs( 5, 6, 7 );
 
-	EXPECT_EQ( sink->callCount, 1 );
+	EXPECT_EQ( sink.callCount, 1 );
+	EXPECT_EQ( sink.lastA, 5 );
 }
 
-// ---------------------------------------------------------------------------
-// Mixed arg types - take only the first (string) arg from (int, string) event
-// ---------------------------------------------------------------------------
-
-TEST( PartialArgs, MixedArgEventFirstArgOnly )
+TYPED_TEST( PartialArgs, ThreeArgEventTwoArgHandler )
 {
-	auto src = std::make_shared< Source >();
-	auto sink = std::make_shared< Sink >();
+	Source< TypeParam > src;
+	Sink sink;
 
-	// Event<int, string>, handler takes (string) would be the second arg -
-	// instead test handler taking just the first arg (int)
-	src->mixedArgs.connect( sink, &Sink::onOne );
-	src->mixedArgs( 77, std::string( "hello" ) );
+	src.threeArgs.connect( sink, &Sink::onTwo );
+	src.threeArgs( 11, 22, 33 );
 
-	EXPECT_EQ( sink->callCount, 1 );
-	EXPECT_EQ( sink->lastA, 77 );
+	EXPECT_EQ( sink.callCount, 1 );
+	EXPECT_EQ( sink.lastA, 11 );
+	EXPECT_EQ( sink.lastB, 22 );
 }
 
-// ---------------------------------------------------------------------------
-// Multiple emissions still work correctly
-// ---------------------------------------------------------------------------
-
-TEST( PartialArgs, MultipleEmissionsPartialHandler )
+TYPED_TEST( PartialArgs, TwoArgEventZeroArgHandler )
 {
-	auto src = std::make_shared< Source >();
-	auto sink = std::make_shared< Sink >();
+	Source< TypeParam > src;
+	Sink sink;
 
-	src->twoArgs.connect( sink, &Sink::onOne );
+	src.twoArgs.connect( sink, &Sink::onZero );
+	src.twoArgs( 99, 99 );
 
-	src->twoArgs( 1, 100 );
-	src->twoArgs( 2, 200 );
-	src->twoArgs( 3, 300 );
-
-	EXPECT_EQ( sink->callCount, 3 );
-	EXPECT_EQ( sink->lastA, 3 );  // last emission
+	EXPECT_EQ( sink.callCount, 1 );
 }
 
-// ---------------------------------------------------------------------------
-// Partial matching works via connectOnce
-// ---------------------------------------------------------------------------
-
-TEST( PartialArgs, ConnectOncePartialArgs )
+TYPED_TEST( PartialArgs, ThreeArgEventZeroArgHandler )
 {
-	auto src = std::make_shared< Source >();
-	auto sink = std::make_shared< Sink >();
+	Source< TypeParam > src;
+	Sink sink;
 
-	src->twoArgs.connectOnce( sink, &Sink::onOne );
-	src->twoArgs( 55, 66 );
-	src->twoArgs( 77, 88 );  // should not fire - already disconnected
+	src.threeArgs.connect( sink, &Sink::onZero );
+	src.threeArgs( 1, 2, 3 );
 
-	EXPECT_EQ( sink->callCount, 1 );
-	EXPECT_EQ( sink->lastA, 55 );
+	EXPECT_EQ( sink.callCount, 1 );
 }
 
-// ---------------------------------------------------------------------------
-// Partial matching works via connectWithPriority
-// ---------------------------------------------------------------------------
-
-TEST( PartialArgs, ConnectWithPriorityPartialArgs )
+TYPED_TEST( PartialArgs, MixedArgEventFirstArgOnly )
 {
-	auto src = std::make_shared< Source >();
-	auto sink = std::make_shared< Sink >();
+	Source< TypeParam > src;
+	Sink sink;
 
-	src->twoArgs.connectWithPriority( sink, &Sink::onOne, 0 );
-	src->twoArgs( 44, 55 );
+	src.mixedArgs.connect( sink, &Sink::onOne );
+	src.mixedArgs( 77, std::string( "hello" ) );
 
-	EXPECT_EQ( sink->callCount, 1 );
-	EXPECT_EQ( sink->lastA, 44 );
+	EXPECT_EQ( sink.callCount, 1 );
+	EXPECT_EQ( sink.lastA, 77 );
+}
+
+TYPED_TEST( PartialArgs, MultipleEmissionsPartialHandler )
+{
+	Source< TypeParam > src;
+	Sink sink;
+
+	src.twoArgs.connect( sink, &Sink::onOne );
+
+	src.twoArgs( 1, 100 );
+	src.twoArgs( 2, 200 );
+	src.twoArgs( 3, 300 );
+
+	EXPECT_EQ( sink.callCount, 3 );
+	EXPECT_EQ( sink.lastA, 3 );
 }
 
 // ---------------------------------------------------------------------------
-// Partial matching works via connectIf
+// Partial matching combined with an explicit priority
 // ---------------------------------------------------------------------------
 
-TEST( PartialArgs, ConnectIfPartialArgs )
+TYPED_TEST( PartialArgs, ConnectWithPriorityPartialArgs )
 {
-	auto src = std::make_shared< Source >();
-	auto sink = std::make_shared< Sink >();
+	Source< TypeParam > src;
+	Sink sink;
 
-	// condition receives full args; handler receives only first
-	src->twoArgs.connectIf(
+	src.twoArgs.template connect< &Sink::onOne >( sink, 0u );
+	src.twoArgs( 44, 55 );
+
+	EXPECT_EQ( sink.callCount, 1 );
+	EXPECT_EQ( sink.lastA, 44 );
+}
+
+// ---------------------------------------------------------------------------
+// Partial matching via connect() with predicate - Pred and Handler are
+// matched independently, so a partial-arity handler can pair with a
+// full-arity predicate.
+// ---------------------------------------------------------------------------
+
+TYPED_TEST( PartialArgs, ConnectPartialArgsWithPredicate )
+{
+	class PredSink : public Sink
+	{
+	public:
+		bool checkFirstGreaterThan5( int a, int ) { return a > 5; }
+	};
+
+	Source< TypeParam > src;
+	PredSink sink;
+
+	src.twoArgs.template connect< &PredSink::onOne >(
 		sink,
-		&Sink::onOne,
-		[]( int a, int ) { return a > 5; } );
+		{ [ &sink ]( int a, int b ) { return sink.checkFirstGreaterThan5( a, b ); } } );
 
-	src->twoArgs( 3, 10 );   // condition false - skip
-	EXPECT_EQ( sink->callCount, 0 );
+	src.twoArgs( 3, 10 );   // condition false - skip
+	EXPECT_EQ( sink.callCount, 0 );
 
-	src->twoArgs( 10, 20 );  // condition true
-	EXPECT_EQ( sink->callCount, 1 );
-	EXPECT_EQ( sink->lastA, 10 );
+	src.twoArgs( 10, 20 );  // condition true
+	EXPECT_EQ( sink.callCount, 1 );
+	EXPECT_EQ( sink.lastA, 10 );
 }
 
 // ---------------------------------------------------------------------------
-// Partial matching works via ReceiverLifetimeAnchor
+// Partial matching with a non-Trackable receiver bundled via Tracked<T>
 // ---------------------------------------------------------------------------
 
-TEST( PartialArgs, RLAPartialArgs )
+TYPED_TEST( PartialArgs, AnchoredReceiverPartialArgs )
 {
 	class PlainSink
 	{
@@ -248,15 +242,247 @@ TEST( PartialArgs, RLAPartialArgs )
 
 		void onOne( int a ) { callCount++; lastA = a; }
 
-		pulsar::ReceiverLifetimeAnchor< PlainSink > pulsarAnchor { this };
+		pulsar::Anchor pulsarAnchor;
 	};
 
-	auto src = std::make_shared< Source >();
+	Source< TypeParam > src;
 	PlainSink sink;
 
-	src->twoArgs.connect( sink.pulsarAnchor, &PlainSink::onOne );
-	src->twoArgs( 7, 8 );
+	src.twoArgs.template connect< &PlainSink::onOne >( { sink, sink.pulsarAnchor } );
+	src.twoArgs( 7, 8 );
 
 	EXPECT_EQ( sink.callCount, 1 );
 	EXPECT_EQ( sink.lastA, 7 );
+}
+
+// ---------------------------------------------------------------------------
+// Partial matching via the NTTP connect<&Method>(receiver) syntax
+// ---------------------------------------------------------------------------
+
+TYPED_TEST( PartialArgs, NTTPExactMatchOneArg )
+{
+	Source< TypeParam > src;
+	Sink sink;
+
+	src.oneArg.template connect< &Sink::onOne >( sink );
+	src.oneArg( 42 );
+
+	EXPECT_EQ( sink.callCount, 1 );
+	EXPECT_EQ( sink.lastA, 42 );
+}
+
+TYPED_TEST( PartialArgs, NTTPExactMatchTwoArgs )
+{
+	Source< TypeParam > src;
+	Sink sink;
+
+	src.twoArgs.template connect< &Sink::onTwo >( sink );
+	src.twoArgs( 3, 7 );
+
+	EXPECT_EQ( sink.callCount, 1 );
+	EXPECT_EQ( sink.lastA, 3 );
+	EXPECT_EQ( sink.lastB, 7 );
+}
+
+TYPED_TEST( PartialArgs, NTTPTwoArgEventOneArgHandler )
+{
+	Source< TypeParam > src;
+	Sink sink;
+
+	// event fires (int, int), handler takes (int) - second arg dropped
+	src.twoArgs.template connect< &Sink::onOne >( sink );
+	src.twoArgs( 10, 20 );
+
+	EXPECT_EQ( sink.callCount, 1 );
+	EXPECT_EQ( sink.lastA, 10 );
+}
+
+TYPED_TEST( PartialArgs, NTTPThreeArgEventOneArgHandler )
+{
+	Source< TypeParam > src;
+	Sink sink;
+
+	src.threeArgs.template connect< &Sink::onOne >( sink );
+	src.threeArgs( 5, 6, 7 );
+
+	EXPECT_EQ( sink.callCount, 1 );
+	EXPECT_EQ( sink.lastA, 5 );
+}
+
+TYPED_TEST( PartialArgs, NTTPThreeArgEventTwoArgHandler )
+{
+	Source< TypeParam > src;
+	Sink sink;
+
+	src.threeArgs.template connect< &Sink::onTwo >( sink );
+	src.threeArgs( 11, 22, 33 );
+
+	EXPECT_EQ( sink.callCount, 1 );
+	EXPECT_EQ( sink.lastA, 11 );
+	EXPECT_EQ( sink.lastB, 22 );
+}
+
+TYPED_TEST( PartialArgs, NTTPTwoArgEventZeroArgHandler )
+{
+	Source< TypeParam > src;
+	Sink sink;
+
+	// drop all args - handler takes no arguments at all
+	src.twoArgs.template connect< &Sink::onZero >( sink );
+	src.twoArgs( 99, 99 );
+
+	EXPECT_EQ( sink.callCount, 1 );
+}
+
+TYPED_TEST( PartialArgs, NTTPThreeArgEventZeroArgHandler )
+{
+	Source< TypeParam > src;
+	Sink sink;
+
+	src.threeArgs.template connect< &Sink::onZero >( sink );
+	src.threeArgs( 1, 2, 3 );
+
+	EXPECT_EQ( sink.callCount, 1 );
+}
+
+TYPED_TEST( PartialArgs, NTTPMixedArgEventFirstArgOnly )
+{
+	Source< TypeParam > src;
+	Sink sink;
+
+	src.mixedArgs.template connect< &Sink::onOne >( sink );
+	src.mixedArgs( 77, std::string( "hello" ) );
+
+	EXPECT_EQ( sink.callCount, 1 );
+	EXPECT_EQ( sink.lastA, 77 );
+}
+
+TYPED_TEST( PartialArgs, NTTPMultipleEmissionsPartialHandler )
+{
+	Source< TypeParam > src;
+	Sink sink;
+
+	src.twoArgs.template connect< &Sink::onOne >( sink );
+
+	src.twoArgs( 1, 100 );
+	src.twoArgs( 2, 200 );
+	src.twoArgs( 3, 300 );
+
+	EXPECT_EQ( sink.callCount, 3 );
+	EXPECT_EQ( sink.lastA, 3 );  // last emission
+}
+
+TYPED_TEST( PartialArgs, NTTPDisconnectPartialHandler )
+{
+	Source< TypeParam > src;
+	Sink sink;
+
+	src.twoArgs.template connect< &Sink::onOne >( sink );
+	src.twoArgs( 1, 2 );
+	EXPECT_EQ( sink.callCount, 1 );
+
+	src.twoArgs.template disconnect< &Sink::onOne >( sink );
+	src.twoArgs( 3, 4 );
+
+	EXPECT_EQ( sink.callCount, 1 );  // unchanged - disconnected
+}
+
+// ---------------------------------------------------------------------------
+// Partial matching via the NTTP connectFree<&Func>() syntax
+// ---------------------------------------------------------------------------
+
+namespace
+{
+	int freeCallCount = 0;
+	int freeLastA = -1;
+	int freeLastB = -1;
+
+	void resetFreeCounters()
+	{
+		freeCallCount = 0;
+		freeLastA = -1;
+		freeLastB = -1;
+	}
+
+	void onZeroFree() { freeCallCount++; }
+	void onOneFree( int a ) { freeCallCount++; freeLastA = a; }
+	void onTwoFree( int a, int b ) { freeCallCount++; freeLastA = a; freeLastB = b; }
+}
+
+TYPED_TEST( PartialArgs, NTTPFreeFunctionExactMatch )
+{
+	Source< TypeParam > src;
+	resetFreeCounters();
+
+	src.twoArgs.template connectFree< &onTwoFree >();
+	src.twoArgs( 3, 7 );
+
+	EXPECT_EQ( freeCallCount, 1 );
+	EXPECT_EQ( freeLastA, 3 );
+	EXPECT_EQ( freeLastB, 7 );
+}
+
+TYPED_TEST( PartialArgs, NTTPFreeFunctionDropTrailingArgs )
+{
+	Source< TypeParam > src;
+	resetFreeCounters();
+
+	// event fires (int, int, int), function takes (int) - trailing args dropped
+	src.threeArgs.template connectFree< &onOneFree >();
+	src.threeArgs( 5, 6, 7 );
+
+	EXPECT_EQ( freeCallCount, 1 );
+	EXPECT_EQ( freeLastA, 5 );
+}
+
+TYPED_TEST( PartialArgs, NTTPFreeFunctionDropAllArgs )
+{
+	Source< TypeParam > src;
+	resetFreeCounters();
+
+	src.twoArgs.template connectFree< &onZeroFree >();
+	src.twoArgs( 99, 99 );
+
+	EXPECT_EQ( freeCallCount, 1 );
+}
+
+TYPED_TEST( PartialArgs, NTTPFreeFunctionDisconnectPartialHandler )
+{
+	Source< TypeParam > src;
+	resetFreeCounters();
+
+	src.twoArgs.template connectFree< &onOneFree >();
+	src.twoArgs( 1, 2 );
+	EXPECT_EQ( freeCallCount, 1 );
+
+	src.twoArgs.template disconnectFree< &onOneFree >();
+	src.twoArgs( 3, 4 );
+
+	EXPECT_EQ( freeCallCount, 1 );  // unchanged - disconnected
+}
+
+// ---------------------------------------------------------------------------
+// Partial matching via connect() with Once() - once() static_asserts against
+// SharedMutex, so this is its own suite restricted to Event/SingleThreadedEvent.
+// ---------------------------------------------------------------------------
+
+template< typename MutexType >
+class PartialArgsOnce : public ::testing::Test {};
+
+using OnceCapableMutexTypes = ::testing::Types<
+	pulsar::platform::RecursiveMutex,
+	pulsar::platform::NullMutex >;
+TYPED_TEST_SUITE( PartialArgsOnce, OnceCapableMutexTypes );
+
+TYPED_TEST( PartialArgsOnce, ConnectOncePartialArgs )
+{
+	Source< TypeParam > src;
+	Sink sink;
+
+	src.twoArgs.template connect< &Sink::onOne >( sink, src.twoArgs.params().once() );
+	src.twoArgs( 55, 66 );
+	src.twoArgs( 77, 88 );  // should not fire - already disconnected
+
+	EXPECT_EQ( sink.callCount, 1 );
+	EXPECT_EQ( sink.lastA, 55 );
 }

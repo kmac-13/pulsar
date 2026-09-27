@@ -5,17 +5,37 @@
 
 // ---------------------------------------------------------------------------
 // RecordableEvent
+//
+// Verifies recording, replay, pause/resume, timing statistics, and export
+// on top of an ordinary Event: a RecordableEvent behaves like any other
+// event for connect()/operator(), but its recorder() can capture emitted
+// arguments and later replay them against whatever is currently connected.
+//
+// BasicRecordableEvent<MutexType, Args...> is parametrized on MutexType the
+// same way BasicEvent is (RecordableEvent/SharedRecordableEvent/
+// SingleThreadedRecordableEvent are the matching aliases).  No test here does
+// reentrant connect/disconnect from within its own dispatch, and no test
+// spawns real threads, so all three MutexType variants are safe.
 // ---------------------------------------------------------------------------
 
-TEST( RecordableEvent, BasicRecordAndReplay )
-{
-	auto sender = std::make_shared< pulsar::Object >();
-	auto receiver = std::make_shared< pulsar::Object >();
+template< typename MutexType >
+class RecordableEvent : public ::testing::Test {};
 
-	pulsar::RecordableEvent< int > event{ sender.get() };
+using MutexTypes = ::testing::Types<
+	pulsar::platform::RecursiveMutex,
+	pulsar::platform::SharedMutex,
+	pulsar::platform::NullMutex >;
+TYPED_TEST_SUITE( RecordableEvent, MutexTypes );
+
+TYPED_TEST( RecordableEvent, BasicRecordAndReplay )
+{
+	pulsar::Trackable sender;
+	pulsar::Trackable receiver;
+
+	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
 
 	std::vector< int > received;
-	event.connect( receiver, [ &received ]( int v ) { received.push_back( v ); } );
+	event.connectLambda( receiver, [ &received ]( int v ) { received.push_back( v ); } );
 
 	event.recorder().startRecording();
 	event( 10 );
@@ -34,10 +54,10 @@ TEST( RecordableEvent, BasicRecordAndReplay )
 	EXPECT_EQ( received[ 2 ], 30 );
 }
 
-TEST( RecordableEvent, RecordingLimit )
+TYPED_TEST( RecordableEvent, RecordingLimit )
 {
-	auto sender = std::make_shared< pulsar::Object >();
-	pulsar::RecordableEvent< int > event{ sender.get() };
+	pulsar::Trackable sender;
+	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
 
 	// keep only last 3
 	event.recorder().startRecording( 3 );
@@ -54,10 +74,10 @@ TEST( RecordableEvent, RecordingLimit )
 	EXPECT_EQ( std::get< 0 >( recordings[ 2 ].args ), 10 );
 }
 
-TEST( RecordableEvent, PauseAndResume )
+TYPED_TEST( RecordableEvent, PauseAndResume )
 {
-	auto sender = std::make_shared< pulsar::Object >();
-	pulsar::RecordableEvent< int > event{ sender.get() };
+	pulsar::Trackable sender;
+	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
 
 	event.recorder().startRecording();
 	event( 1 );
@@ -78,10 +98,10 @@ TEST( RecordableEvent, PauseAndResume )
 	EXPECT_EQ( std::get< 0 >( recordings[ 2 ].args ), 5 );
 }
 
-TEST( RecordableEvent, StopClearsRecording )
+TYPED_TEST( RecordableEvent, StartClearsPreviousRecording )
 {
-	auto sender = std::make_shared< pulsar::Object >();
-	pulsar::RecordableEvent< int > event{ sender.get() };
+	pulsar::Trackable sender;
+	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
 
 	event.recorder().startRecording();
 	event( 1 );
@@ -97,35 +117,92 @@ TEST( RecordableEvent, StopClearsRecording )
 	EXPECT_EQ( std::get< 0 >( event.recorder().getRecordings()[ 0 ].args ), 3 );
 }
 
-TEST( RecordableEvent, ReplayWithSpeed )
+// Tests that the timing gaps between event triggers are preserved and
+// included as part of the replay.
+TYPED_TEST( RecordableEvent, ReplayWithTiming )
 {
-	auto sender = std::make_shared< pulsar::Object >();
-	auto receiver = std::make_shared< pulsar::Object >();
+	pulsar::Trackable sender;
+	pulsar::Trackable receiver;
 
-	pulsar::RecordableEvent< int > event{ sender.get() };
+	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
 	std::vector< int > received;
-	event.connect( receiver, [ &received ]( int v ) { received.push_back( v ); } );
+	event.connectLambda( receiver, [ &received ]( int v ) { received.push_back( v ); } );
 
 	event.recorder().startRecording();
 	event( 1 );
+	msleep( 60 );
 	event( 2 );
+	msleep( 60 );
 	event( 3 );
 	event.recorder().stopRecording();
 
-	received.clear();
-	// 10x speed - should still replay all events, just faster
-	event.recorder().replayWithSpeed( 10.0 );
+	auto totalDuration = event.recorder().getTimingStats().totalDuration;
+	ASSERT_GT( totalDuration.count(), 0 );
 
-	EXPECT_EQ( received.size(), 3u );
-	EXPECT_EQ( received[ 0 ], 1 );
-	EXPECT_EQ( received[ 1 ], 2 );
-	EXPECT_EQ( received[ 2 ], 3 );
+	received.clear();
+	auto start = std::chrono::steady_clock::now();
+	event.recorder().replayWithTiming();
+	auto elapsed = std::chrono::steady_clock::now() - start;
+
+	EXPECT_EQ( received, ( std::vector< int >{ 1, 2, 3 } ) );
+
+	// replayWithTiming() preserves the ORIGINAL pacing (no scaling) - elapsed
+	// wall-clock time should land close to totalDuration, not near-instant
+	// (which would mean the recorded timing was ignored rather than
+	// actually respected), and not wildly longer either
+	EXPECT_GT( elapsed, totalDuration / 2 );
+	EXPECT_LT( elapsed, totalDuration * 2 );
 }
 
-TEST( RecordableEvent, TimingStats )
+// Tests that the timing gaps between event triggers are preserved and
+// included as part of the replay, but adjusted according to the speed factor.
+// A speed factor of 0.5 means half the speed, so each event will take twice
+// as long to trigger after the previous event compared to the original timing,
+// and a speed factor of 2.0 means twice the speed, so each event will take half
+// as long to trigger after the previous event compared to the original timing.
+TYPED_TEST( RecordableEvent, ReplayWithSpeed )
 {
-	auto sender = std::make_shared< pulsar::Object >();
-	pulsar::RecordableEvent< int > event{ sender.get() };
+	pulsar::Trackable sender;
+	pulsar::Trackable receiver;
+
+	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
+	std::vector< int > received;
+	event.connectLambda( receiver, [ &received ]( int v ) { received.push_back( v ); } );
+
+	event.recorder().startRecording();
+	event( 1 );
+	msleep( 60 );
+	event( 2 );
+	msleep( 60 );
+	event( 3 );
+	event.recorder().stopRecording();
+
+	// real elapsed time recorded, not just three back-to-back calls with
+	// nothing to scale - this is what makes the speed check below meaningful
+	auto totalDuration = event.recorder().getTimingStats().totalDuration;
+	ASSERT_GT( totalDuration.count(), 0 );
+
+	received.clear();
+	auto start = std::chrono::steady_clock::now();
+	event.recorder().replayWithSpeed( 10.0 );
+	auto elapsed = std::chrono::steady_clock::now() - start;
+
+	EXPECT_EQ( received, ( std::vector< int >{ 1, 2, 3 } ) );
+
+	// at 10x speed, replay should take roughly totalDuration/10 - bounds are
+	// generous to absorb scheduling jitter (particularly on Windows, where
+	// default timer resolution is coarse), while still catching a broken or
+	// inverted speed multiplier: comfortably faster than an unscaled (1x)
+	// replay would be, and not suspiciously close to zero, which would mean
+	// the recorded timing was ignored rather than actually scaled
+	EXPECT_LT( elapsed, totalDuration / 2 );
+	EXPECT_GT( elapsed, totalDuration / 20 );
+}
+
+TYPED_TEST( RecordableEvent, TimingStats )
+{
+	pulsar::Trackable sender;
+	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
 
 	event.recorder().startRecording();
 	event( 1 );
@@ -142,10 +219,10 @@ TEST( RecordableEvent, TimingStats )
 	EXPECT_GE( stats.maxInterval.count(), stats.minInterval.count() );
 }
 
-TEST( RecordableEvent, ExportToCSV )
+TYPED_TEST( RecordableEvent, ExportToCSV )
 {
-	auto sender = std::make_shared< pulsar::Object >();
-	pulsar::RecordableEvent< int > event{ sender.get() };
+	pulsar::Trackable sender;
+	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
 
 	event.recorder().startRecording();
 	event( 42 );
@@ -170,10 +247,10 @@ TEST( RecordableEvent, ExportToCSV )
 	EXPECT_NE( content.find( "99" ), std::string::npos );
 }
 
-TEST( RecordableEvent, DumpRecordings )
+TYPED_TEST( RecordableEvent, DumpRecordings )
 {
-	auto sender = std::make_shared< pulsar::Object >();
-	pulsar::RecordableEvent< int > event{ sender.get() };
+	pulsar::Trackable sender;
+	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
 
 	event.recorder().startRecording();
 	event( 7 );
@@ -187,13 +264,13 @@ TEST( RecordableEvent, DumpRecordings )
 	EXPECT_NE( oss.str().find( "13" ), std::string::npos );
 }
 
-TEST( RecordableEvent, PerformanceStatistics )
+TYPED_TEST( RecordableEvent, PerformanceStatistics )
 {
-	auto sender = std::make_shared< pulsar::Object >();
-	auto receiver = std::make_shared< pulsar::Object >();
+	pulsar::Trackable sender;
+	pulsar::Trackable receiver;
 
-	pulsar::RecordableEvent< int > event{ sender.get() };
-	event.connect( receiver, []( int ) {} );
+	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
+	event.connectLambda( receiver, []( int ) {} );
 
 	event.enableStatistics();
 

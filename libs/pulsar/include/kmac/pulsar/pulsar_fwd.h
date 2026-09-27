@@ -14,58 +14,11 @@
 namespace kmac {
 namespace pulsar {
 
-class Connection;
-class ConnectionBase;
-class ConnectionGroup;
-class EventLoop;
-class Object;
-class ScopedConnection;
-
-/**
- * @brief Specifies how a handler is invoked relative to the triggering thread.
- */
-enum class ConnectionType
-{
-	Auto,               ///< resolved at trigger-time: Direct if sender and receiver share a loop, Deferred otherwise
-	Direct,             ///< handler executes immediately on the triggering thread
-	Deferred,           ///< invocation is deferred to the receiver's EventLoop
-	// Queued = Deferred,  ///< alias for Deferred (familiar to Qt/Boost users)
-};
-
-/**
- * @brief Controls when and in whose context a connectIf() predicate is evaluated.
- *
- * @see Event::connectIf()
- */
-enum class PredicateContext
-{
-	/**
-	 * Predicate is evaluated at emission time inside @c triggerImpl(), before
-	 * any queuing occurs.  If the predicate returns false the connection is
-	 * skipped entirely - nothing is queued.
-	 *
-	 * Safe when the predicate inspects sender state or event arguments that
-	 * may change between emission and deferred invocation, and when the
-	 * predicate is safe to call on the sender's thread.  For Direct
-	 * connections the timing difference is irrelevant since emission and
-	 * invocation are synchronous.
-	 */
-	Sender,
-
-	/**
-	 * Predicate is evaluated immediately before the handler runs, in the same
-	 * context as the handler itself.  For Direct connections this is the
-	 * triggering thread; for Deferred connections this is the receiver's
-	 * EventLoop drain thread at dequeue time.
-	 *
-	 * This is the default.  Safe when the predicate inspects only the event
-	 * arguments, atomic state, or state that is stable for the duration of
-	 * the connection's lifetime.  Not suitable when the predicate must reflect
-	 * conditions at the exact moment of emission, since state may have changed
-	 * between emission and dequeue for Deferred connections.
-	 */
-	Receiver,
-};
+class Connection;        ///< see connection.h
+class ConnectionGroup;   ///< see connection_group.h (in extras)
+class EventLoop;         ///< see event_loop.h
+class ScopedConnection;  ///< see connection.h
+class Trackable;         ///< see trackable.h
 
 /**
  * @brief Lifecycle state of an EventRecorder.
@@ -77,56 +30,17 @@ enum class RecordingMode
 	Paused      ///< Recording was started but is temporarily suspended.
 };
 
-template< typename... Args >
-class Event;
+template< typename MutexType, typename... Args >
+class BasicEvent;  ///< see event.h
 
-template< typename FriendType, typename... Args >
-class PrivateEvent;
+template< typename FriendType, typename MutexType, typename... Args >
+class BasicPrivateEvent;  ///< see private_event.h
 
-/// @brief Shorter alias for PrivateEvent.
-template< typename FriendType, typename... Args >
-using PEvent = PrivateEvent< FriendType, Args... >;
+// template< typename MutexType, typename... Args >
+// class EventImpl;
 
-template< typename ReturnType, typename Combiner, typename... Args >
-class CombiningEvent;
-
-template< typename... Args >
-class RecordableEvent;
-
-template< typename... Args >
-class EventRecorder;
-
-template< typename... Args >
-class EventInspector;
-
-template< typename Owner >
-class ReceiverLifetimeAnchor;
-
-// ============================================================================
-// Signal / emit terminology aliases
-// Provided for users migrating from Qt or Boost.Signals2.
-// All aliases are fully interchangeable with their Event counterparts.
-// ============================================================================
-
-/// @brief Alias for Event - prefer Signal-based naming if your team uses Qt conventions
-template< typename... Args >
-using Signal = Event< Args... >;
-
-/// @brief Alias for PrivateEvent
-template< typename FriendType, typename... Args >
-using PSignal = PrivateEvent< FriendType, Args... >;
-
-/// @brief Alias for CombiningEvent
-template< typename ReturnType, typename Combiner, typename... Args >
-using CombiningSignal = CombiningEvent< ReturnType, Combiner, Args... >;
-
-/// @brief Alias for RecordableEvent
-template< typename... Args >
-using RecordableSignal = RecordableEvent< Args... >;
-
-/// @brief Alias for EventRecorder
-template< typename... Args >
-using SignalRecorder = EventRecorder< Args... >;
+template< typename MutexType, typename... Args >
+class EventInspector;  ///< see event_inspector.h (pulsar_extras)
 
 } // namespace pulsar
 } // namespace kmac

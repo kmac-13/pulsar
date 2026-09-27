@@ -2,6 +2,12 @@
 #ifndef KMAC_PULSAR_VERSION_H
 #define KMAC_PULSAR_VERSION_H
 
+/**
+ * @file version.h
+ * @brief Compile-time library version: integer components for preprocessor
+ * comparisons, plus constexpr and string-literal forms for runtime use.
+ */
+
 #include <cstddef>
 
 // NOLINT NOTE: integer macros required for preprocessor version
@@ -20,9 +26,9 @@
 	PULSAR_VERSION_TOSTRING( PULSAR_VERSION_PATCH_INT )
 // NOLINTEND(cppcoreguidelines-macro-usage)
 
-inline constexpr std::size_t PULSAR_VERSION_MAJOR = PULSAR_VERSION_MAJOR_INT;
-inline constexpr std::size_t PULSAR_VERSION_MINOR = PULSAR_VERSION_MINOR_INT;
-inline constexpr std::size_t PULSAR_VERSION_PATCH = PULSAR_VERSION_PATCH_INT;
-inline constexpr const char* PULSAR_VERSION_STRING = PULSAR_VERSION_STRING_LITERAL;
+inline constexpr std::size_t PULSAR_VERSION_MAJOR = PULSAR_VERSION_MAJOR_INT;        ///< breaking / incompatible API changes
+inline constexpr std::size_t PULSAR_VERSION_MINOR = PULSAR_VERSION_MINOR_INT;        ///< backward-compatible feature additions
+inline constexpr std::size_t PULSAR_VERSION_PATCH = PULSAR_VERSION_PATCH_INT;        ///< backward-compatible fixes only
+inline constexpr const char* PULSAR_VERSION_STRING = PULSAR_VERSION_STRING_LITERAL;  ///< "MAJOR.MINOR.PATCH"
 
 #endif // KMAC_PULSAR_VERSION_H

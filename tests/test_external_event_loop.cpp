@@ -1,30 +1,46 @@
 #include "test_helpers.hpp"
 
+#include <kmac/pulsar/auto_drain_thread.h>
+#include <kmac/pulsar/event_loop.h>
+
 // ---------------------------------------------------------------------------
-// Externally-managed EventLoop  (EventLoop::makeManualProcessed())
+// Externally-managed EventLoop
 //
-// No background thread is spawned.  The owner calls processEvents() to drain
-// the queue - e.g. once per frame, after a platform event pump yields, etc.
+// A plain EventLoop has no built-in thread of its own: the owner calls
+// drain() to process the queue - e.g. once per frame, after a platform
+// event pump yields, etc.  AutoDrainThread separately wraps a loop with a
+// background thread that drains it automatically whenever work is posted;
+// hasDrainThread() reflects whether one is currently attached.
 //
 // Auto connection resolution uses EventLoop pointer identity:
 //   same loop instance  -> Direct (synchronous)
-//   different instances -> Deferred (asynchronous to processEvents())
+//   different instances -> Deferred (asynchronous to drain())
 // ---------------------------------------------------------------------------
 
-TEST( ExternalEventLoop, IsSelfThreadedFlag )
+TEST( ExternalEventLoop, HasDrainThreadReflectsAutoDrainThread )
 {
-	auto selfThreaded = pulsar::EventLoop::makeAutoProcessed();
-	EXPECT_TRUE( selfThreaded.isManagedInternally() );
+	pulsar::EventLoop loop;
+	EXPECT_FALSE( loop.hasDrainThread() );
 
-	auto external = pulsar::EventLoop::makeManualProcessed();
-	EXPECT_FALSE( external.isManagedInternally() );
+	{
+		pulsar::AutoDrainThread drainer( loop );
+
+		// setDrainThread() is called from within the background thread's
+		// own startup, not synchronously in this constructor - give it a
+		// moment to run before checking
+		msleep( 20 );
+		EXPECT_TRUE( loop.hasDrainThread() );
+	}
+
+	// cleared when the AutoDrainThread is destroyed
+	EXPECT_FALSE( loop.hasDrainThread() );
 }
 
 TEST( ExternalEventLoop, EventsNotProcessedUntilDrained )
 {
-	auto mainLoop = pulsar::EventLoop::makeManualProcessed();
-	auto workerLoop = pulsar::EventLoop::makeAutoProcessed();
-	workerLoop.start();
+	pulsar::EventLoop mainLoop;
+	pulsar::EventLoop workerLoop;
+	pulsar::AutoDrainThread workerDrainer( workerLoop );
 
 	auto sender = std::make_shared< DataSender >();
 	auto receiver = std::make_shared< DataReceiver >();
@@ -33,26 +49,25 @@ TEST( ExternalEventLoop, EventsNotProcessedUntilDrained )
 	receiver->setEventLoop( &mainLoop );
 
 	// different loops -> Auto resolves Deferred
-	sender->dataReady.connect( receiver, &DataReceiver::processData );
+	sender->dataReady.connect( *receiver, &DataReceiver::processData );
 
-	workerLoop.postEvent( [ &sender ]() { sender->sendData( 42 ); } );
+	workerLoop.post( pulsar::EventLoop::Task::create( [ &sender ]() { sender->sendData( 42 ); } ) );
 
 	msleep( 30 );
+	workerDrainer.stop();  // join, for a happens-before edge below
 
-	// not yet processed - nobody has called mainLoop.processEvents()
+	// not yet processed - nobody has called mainLoop.drain()
 	EXPECT_EQ( receiver->callCount, 0 );
 
-	mainLoop.processEvents();
+	mainLoop.drain();
 
 	EXPECT_EQ( receiver->callCount, 1 );
 	EXPECT_EQ( receiver->lastValue, 42 );
-
-	workerLoop.stop();
 }
 
 TEST( ExternalEventLoop, SameExternalLoopIsDirect )
 {
-	auto sharedLoop = pulsar::EventLoop::makeManualProcessed();
+	pulsar::EventLoop sharedLoop;
 
 	auto sender = std::make_shared< DataSender >();
 	auto receiver = std::make_shared< DataReceiver >();
@@ -61,23 +76,23 @@ TEST( ExternalEventLoop, SameExternalLoopIsDirect )
 	receiver->setEventLoop( &sharedLoop );
 
 	// same loop instance -> Auto resolves Direct
-	sender->dataReady.connect( receiver, &DataReceiver::processData );
+	sender->dataReady.connect( *receiver, &DataReceiver::processData );
 
 	sender->sendData( 99 );
 
 	// the sender has a loop, so emission is deferred to it even though
 	// the connection resolves Direct (same loop instance); one
-	// processEvents() call runs both the deferred emission and the handler
-	sharedLoop.processEvents();
+	// drain() call runs both the deferred emission and the handler
+	sharedLoop.drain();
 	EXPECT_EQ( receiver->callCount, 1 );
 	EXPECT_EQ( receiver->lastValue, 99 );
 }
 
 TEST( ExternalEventLoop, MultipleEventsDrainedTogether )
 {
-	auto mainLoop = pulsar::EventLoop::makeManualProcessed();
-	auto workerLoop = pulsar::EventLoop::makeAutoProcessed();
-	workerLoop.start();
+	pulsar::EventLoop mainLoop;
+	pulsar::EventLoop workerLoop;
+	pulsar::AutoDrainThread workerDrainer( workerLoop );
 
 	auto sender = std::make_shared< DataSender >();
 	auto receiver = std::make_shared< DataReceiver >();
@@ -85,29 +100,28 @@ TEST( ExternalEventLoop, MultipleEventsDrainedTogether )
 	sender->setEventLoop( &workerLoop );
 	receiver->setEventLoop( &mainLoop );
 
-	sender->dataReady.connect( receiver, &DataReceiver::processData );
+	sender->dataReady.connect( *receiver, &DataReceiver::processData );
 
 	for ( int i = 1; i <= 5; ++i )
 	{
-		workerLoop.postEvent( [ &sender, i ]() { sender->sendData( i ); } );
+		workerLoop.post( pulsar::EventLoop::Task::create( [ &sender, i ]() { sender->sendData( i ); } ) );
 	}
 
 	msleep( 50 );
+	workerDrainer.stop();
 
 	EXPECT_EQ( receiver->callCount, 0 );
 
-	mainLoop.processEvents();
+	mainLoop.drain();
 
 	EXPECT_EQ( receiver->callCount, 5 );
-
-	workerLoop.stop();
 }
 
 TEST( ExternalEventLoop, RepeatedTicks )
 {
-	auto mainLoop = pulsar::EventLoop::makeManualProcessed();
-	auto workerLoop = pulsar::EventLoop::makeAutoProcessed();
-	workerLoop.start();
+	pulsar::EventLoop mainLoop;
+	pulsar::EventLoop workerLoop;
+	pulsar::AutoDrainThread workerDrainer( workerLoop );
 
 	auto sender = std::make_shared< DataSender >();
 	auto receiver = std::make_shared< DataReceiver >();
@@ -115,49 +129,28 @@ TEST( ExternalEventLoop, RepeatedTicks )
 	sender->setEventLoop( &workerLoop );
 	receiver->setEventLoop( &mainLoop );
 
-	sender->dataReady.connect( receiver, &DataReceiver::processData );
+	sender->dataReady.connect( *receiver, &DataReceiver::processData );
 
-	workerLoop.postEvent( [ &sender ]() { sender->sendData( 10 ); } );
+	workerLoop.post( pulsar::EventLoop::Task::create( [ &sender ]() { sender->sendData( 10 ); } ) );
 	msleep( 20 );
-	mainLoop.processEvents();
+	mainLoop.drain();
 	EXPECT_EQ( receiver->callCount, 1 );
 
-	workerLoop.postEvent( [ &sender ]() { sender->sendData( 20 ); } );
+	workerLoop.post( pulsar::EventLoop::Task::create( [ &sender ]() { sender->sendData( 20 ); } ) );
 	msleep( 20 );
-	mainLoop.processEvents();
+	mainLoop.drain();
 	EXPECT_EQ( receiver->callCount, 2 );
 
 	// should not throw if no events are available to process
-	mainLoop.processEvents();
+	mainLoop.drain();
 	EXPECT_EQ( receiver->callCount, 2 );
-
-	workerLoop.stop();
-}
-
-TEST( ExternalEventLoop, StartStopAreNoOps )
-{
-	auto mainLoop = pulsar::EventLoop::makeManualProcessed();
-
-	// an externally-managed EventLoop shouldn't throw when starting/stopping
-	mainLoop.start();
-	mainLoop.stop();
-	mainLoop.start();
-	mainLoop.stop();
-
-	auto sender = std::make_shared< DataSender >();
-	auto receiver = std::make_shared< DataReceiver >();
-	receiver->setEventLoop( &mainLoop );
-	sender->dataReady.connect( receiver, &DataReceiver::processData );
-	sender->sendData( 7 );
-	mainLoop.processEvents();
-	EXPECT_EQ( receiver->callCount, 1 );
 }
 
 TEST( ExternalEventLoop, MigrationPreservesPendingEvents )
 {
-	auto mainLoop = pulsar::EventLoop::makeManualProcessed();
-	auto workerLoop = pulsar::EventLoop::makeAutoProcessed();
-	workerLoop.start();
+	pulsar::EventLoop mainLoop;
+	pulsar::EventLoop workerLoop;
+	pulsar::AutoDrainThread workerDrainer( workerLoop );
 
 	auto sender = std::make_shared< DataSender >();
 	auto receiver = std::make_shared< DataReceiver >();
@@ -165,20 +158,18 @@ TEST( ExternalEventLoop, MigrationPreservesPendingEvents )
 	sender->setEventLoop( &workerLoop );
 	receiver->setEventLoop( &mainLoop );
 
-	sender->dataReady.connect( receiver, &DataReceiver::processData );
+	sender->dataReady.connect( *receiver, &DataReceiver::processData );
 
-	workerLoop.postEvent( [ &sender ]() { sender->sendData( 1 ); } );
+	workerLoop.post( pulsar::EventLoop::Task::create( [ &sender ]() { sender->sendData( 1 ); } ) );
 	msleep( 30 );
 
 	// migrate before draining
-	auto mainLoop2 = pulsar::EventLoop::makeManualProcessed();
+	pulsar::EventLoop mainLoop2;
 	receiver->setEventLoop( &mainLoop2 );
 
-	mainLoop.processEvents();   // should be empty - event migrated
+	mainLoop.drain();   // should be empty - event migrated
 	EXPECT_EQ( receiver->callCount, 0 );
 
-	mainLoop2.processEvents();  // pending event is here
+	mainLoop2.drain();  // pending event is here
 	EXPECT_EQ( receiver->callCount, 1 );
-
-	workerLoop.stop();
 }

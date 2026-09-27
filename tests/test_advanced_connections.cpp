@@ -2,55 +2,38 @@
 
 // ---------------------------------------------------------------------------
 // Advanced Connections
+//
+// Split into two typed suites:
+//   - AdvancedConnections (AllEventTypes): priority ordering, blocking,
+//     predicates, and FIFO tie-breaking - none of it reentrant.
+//   - AdvancedConnectionsRestricted (Event/SingleThreadedEvent only):
+//     once() (static_asserts against SharedMutex), plus the two reentrant
+//     connect/disconnect-during-dispatch tests, which deadlock under
+//     SharedEvent's shared-lock dispatch path (confirmed empirically - see
+//     test_pending_removal_stress.cpp / test_reentrancy.cpp).
 // ---------------------------------------------------------------------------
 
-TEST( AdvancedConnections, SingleShotConnection )
+template< typename MutexType >
+class AdvancedConnections : public ::testing::Test {};
+
+using MutexTypes = ::testing::Types<
+	pulsar::platform::RecursiveMutex,
+	pulsar::platform::SharedMutex,
+	pulsar::platform::NullMutex >;
+TYPED_TEST_SUITE( AdvancedConnections, MutexTypes );
+
+TYPED_TEST( AdvancedConnections, SamePriorityFIFO )
 {
-	auto button = std::make_shared< TestButton >();
-	auto handler = std::make_shared< TestHandler >();
-
-	button->clicked.connectOnce( handler, &TestHandler::onClicked );
-
-	button->click( 1, 1 );
-	EXPECT_EQ( handler->callCount, 1 );
-
-	button->click( 2, 2 );
-	EXPECT_EQ( handler->callCount, 1 );  // auto-disconnected after first call
-}
-
-TEST( AdvancedConnections, PriorityConnections )
-{
-	auto button = std::make_shared< TestButton >();
-	auto receiver = std::make_shared< pulsar::Object >();
+	auto button = std::make_unique< TestButtonT< TypeParam > >();
+	auto receiver = std::make_unique< pulsar::Trackable >();
 
 	std::vector< std::string > order;
 
-	button->clicked.connectWithPriority( receiver, [ &order ]( int, int ) { order.push_back( "Low" ); }, -100 );
+	button->clicked.connectLambda( *receiver, [ &order ]( int, int ) { order.push_back( "First" ); } );
 
-	button->clicked.connectWithPriority( receiver, [ &order ]( int, int ) { order.push_back( "Normal" ); }, 0 );
+	button->clicked.connectLambda( *receiver, [ &order ]( int, int ) { order.push_back( "Second" ); } );
 
-	button->clicked.connectWithPriority( receiver, [ &order ]( int, int ) { order.push_back( "High" ); }, 100 );
-
-	button->click( 1, 1 );
-
-	ASSERT_EQ( order.size(), 3u );
-	EXPECT_EQ( order[ 0 ], "High" );
-	EXPECT_EQ( order[ 1 ], "Normal" );
-	EXPECT_EQ( order[ 2 ], "Low" );
-}
-
-TEST( AdvancedConnections, SamePriorityFIFO )
-{
-	auto button = std::make_shared< TestButton >();
-	auto receiver = std::make_shared< pulsar::Object >();
-
-	std::vector< std::string > order;
-
-	button->clicked.connectWithPriority( receiver, [ &order ]( int, int ) { order.push_back( "First" ); }, 0 );
-
-	button->clicked.connectWithPriority( receiver, [ &order ]( int, int ) { order.push_back( "Second" ); }, 0 );
-
-	button->clicked.connectWithPriority( receiver, [ &order ]( int, int ) { order.push_back( "Third" ); }, 0 );
+	button->clicked.connectLambda( *receiver, [ &order ]( int, int ) { order.push_back( "Third" ); } );
 
 	button->click( 1, 1 );
 
@@ -60,12 +43,15 @@ TEST( AdvancedConnections, SamePriorityFIFO )
 	EXPECT_EQ( order[ 2 ], "Third" );
 }
 
-TEST( AdvancedConnections, ConditionalConnection )
+TYPED_TEST( AdvancedConnections, ConditionalConnection )
 {
-	auto button = std::make_shared< TestButton >();
-	auto handler = std::make_shared< TestHandler >();
+	auto button = std::make_unique< TestButtonT< TypeParam > >();
+	auto handler = std::make_unique< TestHandler >();
 
-	button->clicked.connectIf( handler, &TestHandler::onClicked, []( int x, int y ) { return x > 0 && y > 0; } );
+	button->clicked.connectLambda(
+		*handler,
+		[ handler = handler.get() ]( int x, int y ) { handler->onClicked( x, y ); },  // handler
+		{ []( int x, int y ) { return x > 0 && y > 0; } } );                          // predicate
 
 	button->click( 10, 20 );
 	EXPECT_EQ( handler->callCount, 1 );
@@ -80,12 +66,12 @@ TEST( AdvancedConnections, ConditionalConnection )
 	EXPECT_EQ( handler->callCount, 2 );
 }
 
-TEST( AdvancedConnections, ConnectionBlocking )
+TYPED_TEST( AdvancedConnections, ConnectionBlocking )
 {
-	auto button = std::make_shared< TestButton >();
-	auto handler = std::make_shared< TestHandler >();
+	auto button = std::make_unique< TestButtonT< TypeParam > >();
+	auto handler = std::make_unique< TestHandler >();
 
-	auto conn = button->clicked.connect( handler, &TestHandler::onClicked );
+	auto conn = button->clicked.connect( *handler, &TestHandler::onClicked );
 
 	button->click( 1, 1 );
 	EXPECT_EQ( handler->callCount, 1 );
@@ -103,41 +89,20 @@ TEST( AdvancedConnections, ConnectionBlocking )
 	EXPECT_EQ( handler->callCount, 2 );
 }
 
-TEST( AdvancedConnections, ConditionalConnectionFiltering )
+TYPED_TEST( AdvancedConnections, PriorityExecutionOrder )
 {
-	auto button = std::make_shared< TestButton >();
-	auto receiver = std::make_shared< pulsar::Object >();
-	int  count = 0;
-
-	button->clicked.connectIf( receiver, [ &count ]( int, int ) { count++; }, []( int x, int ) { return x >= 100; } );
-
-	button->click( 50, 50 );
-	EXPECT_EQ( count, 0 );
-
-	button->click( 100, 10 );
-	EXPECT_EQ( count, 1 );
-
-	button->click( 99, 99 );
-	EXPECT_EQ( count, 1 );
-
-	button->click( 200, 5 );
-	EXPECT_EQ( count, 2 );
-}
-
-TEST( AdvancedConnections, PriorityExecutionOrder )
-{
-	auto button = std::make_shared< TestButton >();
-	auto receiver = std::make_shared< pulsar::Object >();
+	auto button = std::make_unique< TestButtonT< TypeParam > >();
+	auto receiver = std::make_unique< pulsar::Trackable >();
 
 	std::vector< int > order;
 
-	button->clicked.connectWithPriority( receiver, [ &order ]( int, int ) { order.push_back( 3 ); }, 50 );
+	button->clicked.connectLambda( *receiver, [ &order ]( int, int ) { order.push_back( 3 ); }, 50 );
 
-	button->clicked.connectWithPriority( receiver, [ &order ]( int, int ) { order.push_back( 1 ); }, 200 );
+	button->clicked.connectLambda( *receiver, [ &order ]( int, int ) { order.push_back( 1 ); }, 200 );
 
-	button->clicked.connectWithPriority( receiver, [ &order ]( int, int ) { order.push_back( 4 ); }, 25 );
+	button->clicked.connectLambda( *receiver, [ &order ]( int, int ) { order.push_back( 4 ); }, 25 );
 
-	button->clicked.connectWithPriority( receiver, [ &order ]( int, int ) { order.push_back( 2 ); }, 100 );
+	button->clicked.connectLambda( *receiver, [ &order ]( int, int ) { order.push_back( 2 ); }, 100 );
 
 	button->click( 0, 0 );
 
@@ -148,16 +113,19 @@ TEST( AdvancedConnections, PriorityExecutionOrder )
 	EXPECT_EQ( order[ 3 ], 4 );  // priority 25
 }
 
-TEST( AdvancedConnections, PriorityWithDynamicConnections )
+// similar to AdvancedConnections.PriorityExecutionOrder, but events are triggered interspersed with connections
+TYPED_TEST( AdvancedConnections, PriorityWithDynamicConnections )
 {
-	auto button = std::make_shared< TestButton >();
-	auto receiver = std::make_shared< pulsar::Object >();
+	auto button = std::make_unique< TestButtonT< TypeParam > >();
+	auto receiver = std::make_unique< pulsar::Trackable >();
 
 	std::vector< std::string > order;
 
-	button->clicked.connectWithPriority( receiver, [ &order ]( int, int ) { order.push_back( "Low" ); }, -10 );
+	// priority is unsigned (no negative-priority concept); use 0/10 to
+	// express "low/high" - higher values run first
+	button->clicked.connectLambda( *receiver, [ &order ]( int, int ) { order.push_back( "Low" ); }, 0 );
 
-	button->clicked.connectWithPriority( receiver, [ &order ]( int, int ) { order.push_back( "High" ); }, 10 );
+	button->clicked.connectLambda( *receiver, [ &order ]( int, int ) { order.push_back( "High" ); }, 10 );
 
 	button->click( 0, 0 );
 	ASSERT_EQ( order.size(), 2u );
@@ -165,11 +133,178 @@ TEST( AdvancedConnections, PriorityWithDynamicConnections )
 	EXPECT_EQ( order[ 1 ], "Low" );
 
 	order.clear();
-	button->clicked.connectWithPriority( receiver, [ &order ]( int, int ) { order.push_back( "Medium" ); }, 0 );
+	button->clicked.connectLambda( *receiver, [ &order ]( int, int ) { order.push_back( "Medium" ); }, 5 );
 
 	button->click( 0, 0 );
 	ASSERT_EQ( order.size(), 3u );
 	EXPECT_EQ( order[ 0 ], "High" );
 	EXPECT_EQ( order[ 1 ], "Medium" );
 	EXPECT_EQ( order[ 2 ], "Low" );
+}
+
+// ---------------------------------------------------------------------------
+// Priority with the NTTP free-function connect form
+// ---------------------------------------------------------------------------
+
+namespace
+{
+	std::vector< int >* nttpPriorityOrder = nullptr;
+	void nttpPriorityA( int, int ) { nttpPriorityOrder->push_back( 1 ); }
+	void nttpPriorityB( int, int ) { nttpPriorityOrder->push_back( 2 ); }
+	void nttpPriorityC( int, int ) { nttpPriorityOrder->push_back( 3 ); }
+}
+
+TYPED_TEST( AdvancedConnections, NTTPFreeFunctionPriority )
+{
+	auto button = std::make_unique< TestButtonT< TypeParam > >();
+
+	std::vector< int > order;
+	nttpPriorityOrder = &order;
+
+	button->clicked.template connectFree< &nttpPriorityA >( 1u );
+	button->clicked.template connectFree< &nttpPriorityC >( 3u );
+	button->clicked.template connectFree< &nttpPriorityB >( 2u );
+
+	button->click( 0, 0 );
+	EXPECT_EQ( order, ( std::vector< int >{ 3, 2, 1 } ) );
+
+	button->clicked.disconnectAll();
+}
+
+// ---------------------------------------------------------------------------
+// Zero-priority (default) connections stay FIFO among themselves and fire
+// after every non-zero-priority connection, regardless of connection order.
+// ---------------------------------------------------------------------------
+
+TYPED_TEST( AdvancedConnections, MixedPriorityAndDefaultOrdering )
+{
+	auto button = std::make_unique< TestButtonT< TypeParam > >();
+	auto receiver = std::make_unique< pulsar::Trackable >();
+
+	std::vector< int > order;
+
+	button->clicked.connectLambda( *receiver, [ &order ]( int, int ) { order.push_back( 10 ); } );  // default 0
+	button->clicked.connectLambda( *receiver, [ &order ]( int, int ) { order.push_back( 20 ); } );  // default 0
+	button->clicked.connectLambda( *receiver, [ &order ]( int, int ) { order.push_back( 5 ); }, 5u );
+	button->clicked.connectLambda( *receiver, [ &order ]( int, int ) { order.push_back( 30 ); } );  // default 0
+
+	button->click( 0, 0 );
+	EXPECT_EQ( order, ( std::vector< int >{ 5, 10, 20, 30 } ) );
+}
+
+// ---------------------------------------------------------------------------
+// blockGuard() nesting: the event stays blocked until every outstanding
+// guard has been released, not just the most recently acquired one.
+// ---------------------------------------------------------------------------
+
+TYPED_TEST( AdvancedConnections, BlockGuardNesting )
+{
+	auto button = std::make_unique< TestButtonT< TypeParam > >();
+	auto handler = std::make_unique< TestHandler >();
+
+	button->clicked.connect( *handler, &TestHandler::onClicked );
+
+	{
+		auto g1 = button->clicked.blockGuard();
+
+		{
+			auto g2 = button->clicked.blockGuard();
+			button->click( 1, 1 );
+			EXPECT_EQ( handler->callCount, 0 );  // blocked by both g1 and g2
+		}
+		// g2 released - still blocked by g1
+
+		button->click( 2, 2 );
+		EXPECT_EQ( handler->callCount, 0 );
+	}
+	// g1 released - unblocked
+
+	button->click( 3, 3 );
+	EXPECT_EQ( handler->callCount, 1 );
+}
+
+// ---------------------------------------------------------------------------
+// Restricted suite: once() and reentrant connect/disconnect-during-dispatch.
+// Event/SingleThreadedEvent only (see file header).
+// ---------------------------------------------------------------------------
+
+template< typename MutexType >
+class AdvancedConnectionsRestricted : public ::testing::Test {};
+
+using RestrictedMutexTypes = ::testing::Types<
+	pulsar::platform::RecursiveMutex,
+	pulsar::platform::NullMutex >;
+TYPED_TEST_SUITE( AdvancedConnectionsRestricted, RestrictedMutexTypes );
+
+TYPED_TEST( AdvancedConnectionsRestricted, SingleShotConnection )
+{
+	auto button = std::make_unique< TestButtonT< TypeParam > >();
+	auto handler = std::make_unique< TestHandler >();
+
+	button->clicked.template connect< &TestHandler::onClicked >( *handler, button->clicked.params().once() );
+
+	button->click( 1, 1 );
+	EXPECT_EQ( handler->callCount, 1 );
+
+	button->click( 2, 2 );
+	EXPECT_EQ( handler->callCount, 1 );  // auto-disconnected after first call
+}
+
+// ---------------------------------------------------------------------------
+// Priority combined with reentrancy: a connection made from within a
+// higher-numbered-priority handler is excluded from the emission already in
+// progress, and correctly takes its place in priority order on the next one.
+// ---------------------------------------------------------------------------
+
+TYPED_TEST( AdvancedConnectionsRestricted, ReentrantConnectDuringPriorityDispatch )
+{
+	auto button = std::make_unique< TestButtonT< TypeParam > >();
+	auto receiver = std::make_shared< pulsar::Trackable >();  // can't be unique_ptr due to capturing lambda
+
+	std::vector< int > order;
+	bool added = false;
+	pulsar::Connection addedConn;
+
+	button->clicked.connectLambda( *receiver, [ &, receiver ]( int, int ) {
+		order.push_back( 5 );
+		if ( ! added )
+		{
+			added = true;
+			// higher priority than the connection currently dispatching -
+			// still excluded from this emission, since the active handler
+			// snapshot was already taken
+			addedConn = button->clicked.connectLambda(
+				*receiver, [ &order ]( int, int ) { order.push_back( 99 ); }, 99u );
+		}
+	}, 5u );
+	button->clicked.connectLambda( *receiver, [ &order ]( int, int ) { order.push_back( 0 ); }, 0u );
+
+	button->click( 0, 0 );
+	EXPECT_EQ( order, ( std::vector< int >{ 5, 0 } ) );  // reentrant connection excluded
+
+	order.clear();
+	button->click( 0, 0 );
+	EXPECT_EQ( order, ( std::vector< int >{ 99, 5, 0 } ) );  // now correctly ordered first
+}
+
+TYPED_TEST( AdvancedConnectionsRestricted, ReentrantDisconnectDuringPriorityDispatch )
+{
+	auto button = std::make_unique< TestButtonT< TypeParam > >();
+	auto receiver = std::make_unique< pulsar::Trackable >();
+
+	std::vector< int > order;
+	pulsar::Connection selfConn;
+
+	selfConn = button->clicked.connectLambda( *receiver, [ &order, &selfConn ]( int, int ) {
+		order.push_back( 10 );
+		selfConn.disconnect();  // disconnect self mid-dispatch
+	}, 10u );
+	button->clicked.connectLambda( *receiver, [ &order ]( int, int ) { order.push_back( 0 ); }, 0u );
+
+	button->click( 0, 0 );
+	EXPECT_EQ( order, ( std::vector< int >{ 10, 0 } ) );  // both still fire this time
+
+	order.clear();
+	button->click( 0, 0 );
+	EXPECT_EQ( order, ( std::vector< int >{ 0 } ) );  // priority-10 handler gone
 }

@@ -1,4 +1,4 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
 // ---------------------------------------------------------------------------
 // Combiners
@@ -32,7 +32,7 @@
 
 TEST( Combiners, SumAddsAllReturnValues )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::Sum< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::Sum< int >, int, int > ev{ nullptr };
 
 	ev.connectLambda( []( int x ) { return x; } );
 	ev.connectLambda( []( int x ) { return x * 2; } );
@@ -43,7 +43,7 @@ TEST( Combiners, SumAddsAllReturnValues )
 
 TEST( Combiners, SumOfEmptyRangeIsZero )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::Sum< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::Sum< int >, int, int > ev{ nullptr };
 	EXPECT_EQ( ev.emit( 42 ), 0 );  // T{} for int
 }
 
@@ -53,7 +53,7 @@ TEST( Combiners, SumOfEmptyRangeIsZero )
 
 TEST( Combiners, ProductMultipliesAllReturnValues )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::Product< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::Product< int >, int, int > ev{ nullptr };
 
 	ev.connectLambda( []( int x ) { return x; } );
 	ev.connectLambda( []( int x ) { return x + 1; } );
@@ -64,7 +64,7 @@ TEST( Combiners, ProductMultipliesAllReturnValues )
 
 TEST( Combiners, ProductOfEmptyRangeIsOne )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::Product< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::Product< int >, int, int > ev{ nullptr };
 	EXPECT_EQ( ev.emit( 99 ), 1 );  // T{1}, not T{} - the multiplicative identity
 }
 
@@ -74,7 +74,7 @@ TEST( Combiners, ProductOfEmptyRangeIsOne )
 
 TEST( Combiners, MeanAveragesAllReturnValues )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::Mean< double >, double, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::Mean< double >, double, int > ev{ nullptr };
 
 	ev.connectLambda( []( int ) { return 10.0; } );
 	ev.connectLambda( []( int ) { return 20.0; } );
@@ -85,7 +85,7 @@ TEST( Combiners, MeanAveragesAllReturnValues )
 
 TEST( Combiners, MeanOfEmptyRangeIsZero )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::Mean< double >, double, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::Mean< double >, double, int > ev{ nullptr };
 	EXPECT_DOUBLE_EQ( ev.emit( 0 ), 0.0 );
 }
 
@@ -93,7 +93,7 @@ TEST( Combiners, AverageAliasBehavesIdenticallyToMean )
 {
 	// Average<T> is a template alias for Mean<T> - same type, just confirms
 	// it's usable as a CombiningEvent's Combiner and produces the same result
-	pulsar::CombiningEvent< pulsar::Combiners::Average< double >, double, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::Average< double >, double, int > ev{ nullptr };
 
 	ev.connectLambda( []( int ) { return 4.0; } );
 	ev.connectLambda( []( int ) { return 8.0; } );
@@ -107,7 +107,7 @@ TEST( Combiners, AverageAliasBehavesIdenticallyToMean )
 
 TEST( Combiners, MaximumReturnsLargestValue )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::Maximum< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::Maximum< int >, int, int > ev{ nullptr };
 
 	ev.connectLambda( []( int ) { return 5; } );
 	ev.connectLambda( []( int ) { return 9; } );
@@ -118,13 +118,13 @@ TEST( Combiners, MaximumReturnsLargestValue )
 
 TEST( Combiners, MaximumOfEmptyRangeIsDefault )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::Maximum< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::Maximum< int >, int, int > ev{ nullptr };
 	EXPECT_EQ( ev.emit( 1 ), 0 );
 }
 
 TEST( Combiners, MinimumReturnsSmallestValue )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::Minimum< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::Minimum< int >, int, int > ev{ nullptr };
 
 	ev.connectLambda( []( int ) { return 5; } );
 	ev.connectLambda( []( int ) { return 9; } );
@@ -135,7 +135,7 @@ TEST( Combiners, MinimumReturnsSmallestValue )
 
 TEST( Combiners, MinimumOfEmptyRangeIsDefault )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::Minimum< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::Minimum< int >, int, int > ev{ nullptr };
 	EXPECT_EQ( ev.emit( 1 ), 0 );
 }
 
@@ -145,7 +145,7 @@ TEST( Combiners, MinimumOfEmptyRangeIsDefault )
 
 TEST( Combiners, CountTrueCountsTrueResults )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::CountTrue, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::CountTrue, int, int > ev{ nullptr };
 
 	ev.connectLambda( []( int x ) { return x > 0; } );
 	ev.connectLambda( []( int x ) { return x > 5; } );
@@ -156,7 +156,7 @@ TEST( Combiners, CountTrueCountsTrueResults )
 
 TEST( Combiners, CountTrueOfEmptyRangeIsZero )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::CountTrue, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::CountTrue, int, int > ev{ nullptr };
 	EXPECT_EQ( ev.emit( 7 ), 0 );
 }
 
@@ -170,7 +170,7 @@ TEST( Combiners, CountTrueOfEmptyRangeIsZero )
 
 TEST( Combiners, FirstReturnsFirstConnectedHandlersValue )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::First< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::First< int >, int, int > ev{ nullptr };
 
 	ev.connectLambda( []( int ) { return 100; } );  // connected first
 	ev.connectLambda( []( int ) { return 200; } );
@@ -181,13 +181,13 @@ TEST( Combiners, FirstReturnsFirstConnectedHandlersValue )
 
 TEST( Combiners, FirstOfEmptyRangeIsDefault )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::First< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::First< int >, int, int > ev{ nullptr };
 	EXPECT_EQ( ev.emit( 0 ), 0 );
 }
 
 TEST( Combiners, FirstNonDefaultSkipsLeadingDefaultResults )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::FirstNonDefault< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::FirstNonDefault< int >, int, int > ev{ nullptr };
 
 	ev.connectLambda( []( int ) { return 0; } );  // default - skipped
 	ev.connectLambda( []( int ) { return 0; } );  // default - skipped
@@ -199,7 +199,7 @@ TEST( Combiners, FirstNonDefaultSkipsLeadingDefaultResults )
 
 TEST( Combiners, FirstNonDefaultAllDefaultReturnsDefault )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::FirstNonDefault< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::FirstNonDefault< int >, int, int > ev{ nullptr };
 
 	ev.connectLambda( []( int ) { return 0; } );
 	ev.connectLambda( []( int ) { return 0; } );
@@ -209,7 +209,7 @@ TEST( Combiners, FirstNonDefaultAllDefaultReturnsDefault )
 
 TEST( Combiners, FirstNonDefaultOfEmptyRangeIsDefault )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::FirstNonDefault< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::FirstNonDefault< int >, int, int > ev{ nullptr };
 	EXPECT_EQ( ev.emit( 0 ), 0 );
 }
 
@@ -219,7 +219,7 @@ TEST( Combiners, FirstNonDefaultOfEmptyRangeIsDefault )
 
 TEST( Combiners, LastReturnsLastConnectedHandlersValue )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::Last< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::Last< int >, int, int > ev{ nullptr };
 
 	ev.connectLambda( []( int ) { return 100; } );
 	ev.connectLambda( []( int ) { return 200; } );
@@ -230,13 +230,13 @@ TEST( Combiners, LastReturnsLastConnectedHandlersValue )
 
 TEST( Combiners, LastOfEmptyRangeIsDefault )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::Last< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::Last< int >, int, int > ev{ nullptr };
 	EXPECT_EQ( ev.emit( 0 ), 0 );
 }
 
 TEST( Combiners, LastNonDefaultSkipsTrailingDefaultResults )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::LastNonDefault< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::LastNonDefault< int >, int, int > ev{ nullptr };
 
 	ev.connectLambda( []( int ) { return 5; } );  // first non-default (not picked)
 	ev.connectLambda( []( int ) { return 7; } );  // last non-default - picked
@@ -248,7 +248,7 @@ TEST( Combiners, LastNonDefaultSkipsTrailingDefaultResults )
 
 TEST( Combiners, LastNonDefaultAllDefaultReturnsDefault )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::LastNonDefault< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::LastNonDefault< int >, int, int > ev{ nullptr };
 
 	ev.connectLambda( []( int ) { return 0; } );
 	ev.connectLambda( []( int ) { return 0; } );
@@ -258,7 +258,7 @@ TEST( Combiners, LastNonDefaultAllDefaultReturnsDefault )
 
 TEST( Combiners, LastNonDefaultOfEmptyRangeIsDefault )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::LastNonDefault< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::LastNonDefault< int >, int, int > ev{ nullptr };
 	EXPECT_EQ( ev.emit( 0 ), 0 );
 }
 
@@ -271,8 +271,8 @@ TEST( Combiners, LastNonDefaultOfEmptyRangeIsDefault )
 
 TEST( Combiners, FirstAndLastDisagreeOnMultipleHandlers )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::First< int >, int, int > firstEv{ nullptr };
-	pulsar::CombiningEvent< pulsar::Combiners::Last< int >, int, int > lastEv{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::First< int >, int, int > firstEv{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::Last< int >, int, int > lastEv{ nullptr };
 
 	auto h1 = []( int ) { return 1; };
 	auto h2 = []( int ) { return 2; };
@@ -304,7 +304,7 @@ TEST( Combiners, FirstAndLastDisagreeOnMultipleHandlers )
 
 TEST( Combiners, FirstSurvivesSlotReuse )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::First< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::First< int >, int, int > ev{ nullptr };
 
 	auto c1 = ev.connectLambda( []( int ) { return 1; } );  // slot 0
 	ev.connectLambda( []( int ) { return 2; } );            // slot 1
@@ -324,7 +324,7 @@ TEST( Combiners, FirstSurvivesSlotReuse )
 
 TEST( Combiners, LastSurvivesSlotReuse )
 {
-	pulsar::CombiningEvent< pulsar::Combiners::Last< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::Last< int >, int, int > ev{ nullptr };
 
 	auto c1 = ev.connectLambda( []( int ) { return 1; } );  // slot 0
 	ev.connectLambda( []( int ) { return 2; } );            // slot 1
@@ -348,7 +348,7 @@ TEST( Combiners, SumIteratesInConnectionOrderNotSlotOrder )
 	// (CombiningEventImpl::order) rather than raw slot order for which
 	// handlers are included, by checking which VALUES appear in the sum
 	// after a slot-reuse scenario, not just their total
-	pulsar::CombiningEvent< pulsar::Combiners::Sum< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::Sum< int >, int, int > ev{ nullptr };
 
 	auto c1 = ev.connectLambda( []( int x ) { return x; } );  // slot 0, value x
 	ev.connectLambda( []( int x ) { return x * 10; } );       // slot 1, value 10x
@@ -370,7 +370,7 @@ TEST( Combiners, DisconnectAllClearsConnectionOrder )
 	// disconnectAll() must clear CombiningEventImpl::order along with
 	// marking every slot inactive - otherwise a subsequent connect() would
 	// append into a stale order list still referencing disconnected slots
-	pulsar::CombiningEvent< pulsar::Combiners::First< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::First< int >, int, int > ev{ nullptr };
 
 	ev.connectLambda( []( int ) { return 1; } );
 	ev.connectLambda( []( int ) { return 2; } );
@@ -388,7 +388,7 @@ TEST( Combiners, SingleShotRemovedFromConnectionOrderAfterFiring )
 	// connection reusing its freed slot is correctly placed at the end of
 	// connection order rather than appearing to occupy the fired
 	// single-shot's old position
-	pulsar::CombiningEvent< pulsar::Combiners::Last< int >, int, int > ev{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::Last< int >, int, int > ev{ nullptr };
 
 	ev.connectLambda( []( int ) { return 1; } );      // slot 0, permanent
 	ev.connectOnceLambda( []( int ) { return 2; } );  // slot 1, fires once

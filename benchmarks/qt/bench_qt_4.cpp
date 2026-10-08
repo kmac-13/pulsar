@@ -60,14 +60,14 @@ using namespace bench;
 //
 // - BM_ConcurrentEmission_Direct_Parallel: Qt::DirectConnection exactly as
 //   Qt provides it, no external lock.  Comparable to nod's / rocket's real
-//   (unmodified) default and Pulsar's SharedEvent-based
+//   (unmodified) default and Stellyra's SharedEvent-based
 //   BM_ConcurrentEmission_Direct_Parallel.
 //
 // - BM_ConcurrentEmission_Direct_Serialized: identical workload, with an
 //   external std::mutex held around each emit call, forcing
 //   one-handler-at-a-time execution - the genuinely equivalent
 //   comparison point against nano TS / sigslot MT / vdk-signals
-//   forced-sync / nod Serialized / rocket Serialized / Pulsar's
+//   forced-sync / nod Serialized / rocket Serialized / Stellyra's
 //   Event-based BM_ConcurrentEmission_Direct_Serialized, at the cost of a
 //   lock Qt itself doesn't provide.
 //
@@ -150,7 +150,7 @@ BENCHMARK( BM_ConcurrentEmission_Direct_Parallel )
 // of receiver count.  CONTENTION_RECEIVER_COUNT receivers are fixed
 // throughout; the number of threads simultaneously calling fired() on the
 // SAME shared signal is the only thing that varies, from 1 (no contention
-// at all) up to 32.  Compare directly against Pulsar's and vdk's
+// at all) up to 32.  Compare directly against Stellyra's and vdk's
 // BM_ContentionScaling_Direct at the same thread counts.
 // ============================================================================
 

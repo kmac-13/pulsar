@@ -1,3 +1,7 @@
+#include "test_helpers.h"
+
+#include <vector>
+
 // ===========================================================================
 // Behaviours specific to the stable-slot dispatch engine: lazy priority
 // ordering (activation and reversion), priority order maintained across
@@ -15,17 +19,13 @@
 //     hung.
 // ===========================================================================
 
-#include "test_helpers.hpp"
-
-#include <vector>
-
 template< typename EventT >
 class StableSlots : public ::testing::Test {};
 
 using EventTypes = ::testing::Types<
-	pulsar::Event< int >,
-	pulsar::SharedEvent< int >,
-	pulsar::SingleThreadedEvent< int > >;
+	stellyra::Event< int >,
+	stellyra::SharedEvent< int >,
+	stellyra::SingleThreadedEvent< int > >;
 TYPED_TEST_SUITE( StableSlots, EventTypes );
 
 TYPED_TEST( StableSlots, PriorityActivatesAndRevertsToFastPath )
@@ -42,7 +42,7 @@ TYPED_TEST( StableSlots, PriorityActivatesAndRevertsToFastPath )
 	// a non-default priority activates the ordered path
 	order.clear();
 	auto hi = ev.connectLambda( [ &order ]( int ) { order.push_back( 9 ); },
-		pulsar::ConnectionType::Auto, 9 );
+		stellyra::ConnectionType::Auto, 9 );
 	ev( 0 );
 	EXPECT_EQ( order, ( std::vector< int >{ 9, 1, 2 } ) );
 
@@ -59,11 +59,11 @@ TYPED_TEST( StableSlots, PriorityOrderSurvivesChurn )
 	std::vector< int > order;
 
 	ev.connectLambda( [ &order ]( int ) { order.push_back( 1 ); },
-		pulsar::ConnectionType::Auto, ev.params().prio( 1 ) );
+		stellyra::ConnectionType::Auto, ev.params().prio( 1 ) );
 	ev.connectLambda( [ &order ]( int ) { order.push_back( 5 ); },
-		pulsar::ConnectionType::Auto, ev.params().prio( 5 ) );
+		stellyra::ConnectionType::Auto, ev.params().prio( 5 ) );
 	auto p3 = ev.connectLambda( [ &order ]( int ) { order.push_back( 3 ); },
-		pulsar::ConnectionType::Auto, ev.params().prio( 3 ) );
+		stellyra::ConnectionType::Auto, ev.params().prio( 3 ) );
 
 	order.clear();
 	ev( 0 );
@@ -72,9 +72,9 @@ TYPED_TEST( StableSlots, PriorityOrderSurvivesChurn )
 	// churn: drop the middle priority, add two more; order must stay by prio
 	p3.disconnect();
 	ev.connectLambda( [ &order ]( int ) { order.push_back( 7 ); },
-		pulsar::ConnectionType::Auto, ev.params().prio( 7 ) );
+		stellyra::ConnectionType::Auto, ev.params().prio( 7 ) );
 	ev.connectLambda( [ &order ]( int ) { order.push_back( 2 ); },
-		pulsar::ConnectionType::Auto, ev.params().prio( 2 ) );
+		stellyra::ConnectionType::Auto, ev.params().prio( 2 ) );
 
 	order.clear();
 	ev( 0 );
@@ -117,8 +117,8 @@ template< typename EventT >
 class StableSlotsReentrant : public ::testing::Test {};
 
 using ReentrantEventTypes = ::testing::Types<
-	pulsar::Event< int >,
-	pulsar::SingleThreadedEvent< int > >;
+	stellyra::Event< int >,
+	stellyra::SingleThreadedEvent< int > >;
 TYPED_TEST_SUITE( StableSlotsReentrant, ReentrantEventTypes );
 
 TYPED_TEST( StableSlotsReentrant, ReentrantConnectWithPriorityDefersToNextEmission )
@@ -136,7 +136,7 @@ TYPED_TEST( StableSlotsReentrant, ReentrantConnectWithPriorityDefersToNextEmissi
 		{
 			added = true;
 			ev.connectLambda( [ &order ]( int ) { order.push_back( 99 ); },
-				pulsar::ConnectionType::Auto, ev.params().prio( 100 ) );
+				stellyra::ConnectionType::Auto, ev.params().prio( 100 ) );
 		}
 	} );
 
@@ -155,15 +155,15 @@ TYPED_TEST( StableSlotsReentrant, ReentrantDisconnectDuringPriorityDispatch )
 	// applied cleanly, and ordering is correct afterwards
 	TypeParam ev;
 	std::vector< int > order;
-	pulsar::Connection self;
+	stellyra::Connection self;
 
 	self = ev.connectLambda( [ & ]( int ) {
 		order.push_back( 5 );
 		self.disconnect();
-	}, pulsar::ConnectionType::Auto, ev.params().prio( 5 ) );
+	}, stellyra::ConnectionType::Auto, ev.params().prio( 5 ) );
 
 	ev.connectLambda( [ &order ]( int ) { order.push_back( 1 ); },
-		pulsar::ConnectionType::Auto, ev.params().prio( 1 ) );
+		stellyra::ConnectionType::Auto, ev.params().prio( 1 ) );
 
 	order.clear();
 	ev( 0 );
@@ -188,10 +188,10 @@ TYPED_TEST( StableSlotsReentrant, LastPriorityConnectionDisconnectingMidDispatch
 	std::vector< int > order;
 
 	// the only priority connection - slot 0
-	pulsar::Connection self = ev.connectLambda( [ & ]( int ) {
+	stellyra::Connection self = ev.connectLambda( [ & ]( int ) {
 		order.push_back( 100 );
 		self.disconnect();
-	}, pulsar::ConnectionType::Auto, ev.params().prio( 5 ) );
+	}, stellyra::ConnectionType::Auto, ev.params().prio( 5 ) );
 
 	auto c1 = ev.connectLambda( [ &order ]( int ) { order.push_back( 1 ); } );  // slot 1, default priority
 	ev.connectLambda( [ &order ]( int ) { order.push_back( 2 ); } );            // slot 2, default priority

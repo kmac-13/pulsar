@@ -1,4 +1,4 @@
-# Pulsar Unit Tests
+# Stellyra Unit Tests
 
 ## Test Files
 

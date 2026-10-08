@@ -1,4 +1,4 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
 #include <fstream>
 #include <sstream>
@@ -22,17 +22,17 @@ template< typename MutexType >
 class RecordableEvent : public ::testing::Test {};
 
 using MutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::SharedMutex,
-	pulsar::platform::NullMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::SharedMutex,
+	stellyra::platform::NullMutex >;
 TYPED_TEST_SUITE( RecordableEvent, MutexTypes );
 
 TYPED_TEST( RecordableEvent, BasicRecordAndReplay )
 {
-	pulsar::Trackable sender;
-	pulsar::Trackable receiver;
+	stellyra::Trackable sender;
+	stellyra::Trackable receiver;
 
-	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
+	stellyra::BasicRecordableEvent< TypeParam, int > event{ &sender };
 
 	std::vector< int > received;
 	event.connectLambda( receiver, [ &received ]( int v ) { received.push_back( v ); } );
@@ -56,8 +56,8 @@ TYPED_TEST( RecordableEvent, BasicRecordAndReplay )
 
 TYPED_TEST( RecordableEvent, RecordingLimit )
 {
-	pulsar::Trackable sender;
-	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
+	stellyra::Trackable sender;
+	stellyra::BasicRecordableEvent< TypeParam, int > event{ &sender };
 
 	// keep only last 3
 	event.recorder().startRecording( 3 );
@@ -76,8 +76,8 @@ TYPED_TEST( RecordableEvent, RecordingLimit )
 
 TYPED_TEST( RecordableEvent, PauseAndResume )
 {
-	pulsar::Trackable sender;
-	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
+	stellyra::Trackable sender;
+	stellyra::BasicRecordableEvent< TypeParam, int > event{ &sender };
 
 	event.recorder().startRecording();
 	event( 1 );
@@ -100,8 +100,8 @@ TYPED_TEST( RecordableEvent, PauseAndResume )
 
 TYPED_TEST( RecordableEvent, StartClearsPreviousRecording )
 {
-	pulsar::Trackable sender;
-	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
+	stellyra::Trackable sender;
+	stellyra::BasicRecordableEvent< TypeParam, int > event{ &sender };
 
 	event.recorder().startRecording();
 	event( 1 );
@@ -121,10 +121,10 @@ TYPED_TEST( RecordableEvent, StartClearsPreviousRecording )
 // included as part of the replay.
 TYPED_TEST( RecordableEvent, ReplayWithTiming )
 {
-	pulsar::Trackable sender;
-	pulsar::Trackable receiver;
+	stellyra::Trackable sender;
+	stellyra::Trackable receiver;
 
-	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
+	stellyra::BasicRecordableEvent< TypeParam, int > event{ &sender };
 	std::vector< int > received;
 	event.connectLambda( receiver, [ &received ]( int v ) { received.push_back( v ); } );
 
@@ -162,10 +162,10 @@ TYPED_TEST( RecordableEvent, ReplayWithTiming )
 // as long to trigger after the previous event compared to the original timing.
 TYPED_TEST( RecordableEvent, ReplayWithSpeed )
 {
-	pulsar::Trackable sender;
-	pulsar::Trackable receiver;
+	stellyra::Trackable sender;
+	stellyra::Trackable receiver;
 
-	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
+	stellyra::BasicRecordableEvent< TypeParam, int > event{ &sender };
 	std::vector< int > received;
 	event.connectLambda( receiver, [ &received ]( int v ) { received.push_back( v ); } );
 
@@ -201,8 +201,8 @@ TYPED_TEST( RecordableEvent, ReplayWithSpeed )
 
 TYPED_TEST( RecordableEvent, TimingStats )
 {
-	pulsar::Trackable sender;
-	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
+	stellyra::Trackable sender;
+	stellyra::BasicRecordableEvent< TypeParam, int > event{ &sender };
 
 	event.recorder().startRecording();
 	event( 1 );
@@ -221,8 +221,8 @@ TYPED_TEST( RecordableEvent, TimingStats )
 
 TYPED_TEST( RecordableEvent, ExportToCSV )
 {
-	pulsar::Trackable sender;
-	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
+	stellyra::Trackable sender;
+	stellyra::BasicRecordableEvent< TypeParam, int > event{ &sender };
 
 	event.recorder().startRecording();
 	event( 42 );
@@ -231,7 +231,7 @@ TYPED_TEST( RecordableEvent, ExportToCSV )
 
 	// use a relative path so the file lands in the test's working directory
 	// regardless of platform - avoids hardcoded /tmp which may not be writable
-	const std::string path = "pulsar_test_export.csv";
+	const std::string path = "stellyra_test_export.csv";
 	event.recorder().exportToCSV( path );
 
 	std::ifstream f( path );
@@ -249,8 +249,8 @@ TYPED_TEST( RecordableEvent, ExportToCSV )
 
 TYPED_TEST( RecordableEvent, DumpRecordings )
 {
-	pulsar::Trackable sender;
-	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
+	stellyra::Trackable sender;
+	stellyra::BasicRecordableEvent< TypeParam, int > event{ &sender };
 
 	event.recorder().startRecording();
 	event( 7 );
@@ -266,10 +266,10 @@ TYPED_TEST( RecordableEvent, DumpRecordings )
 
 TYPED_TEST( RecordableEvent, PerformanceStatistics )
 {
-	pulsar::Trackable sender;
-	pulsar::Trackable receiver;
+	stellyra::Trackable sender;
+	stellyra::Trackable receiver;
 
-	pulsar::BasicRecordableEvent< TypeParam, int > event{ &sender };
+	stellyra::BasicRecordableEvent< TypeParam, int > event{ &sender };
 	event.connectLambda( receiver, []( int ) {} );
 
 	event.enableStatistics();

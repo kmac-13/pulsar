@@ -50,7 +50,7 @@ endif()
 
 # ST variant (vdk::lite)
 
-add_pulsar_benchmark( bench_vdk_st
+add_stellyra_benchmark( bench_vdk_st
 	"${CMAKE_CURRENT_SOURCE_DIR}/bench_vdk.cpp"
 	# No VDK_THREAD_SAFE: bench uses vdk::lite namespace
 )
@@ -58,7 +58,7 @@ target_link_libraries( bench_vdk_st PRIVATE vdk_signals_lib )
 
 # TS variant (vdk namespace)
 
-add_pulsar_benchmark( bench_vdk_ts
+add_stellyra_benchmark( bench_vdk_ts
 	"${CMAKE_CURRENT_SOURCE_DIR}/bench_vdk.cpp"
 	DEFINES VDK_THREAD_SAFE=1
 )
@@ -66,31 +66,31 @@ target_link_libraries( bench_vdk_ts PRIVATE vdk_signals_lib )
 
 # additional TS benchmarks
 
-add_pulsar_benchmark( bench_vdk_ts_contention
+add_stellyra_benchmark( bench_vdk_ts_contention
 	"${CMAKE_CURRENT_SOURCE_DIR}/bench_vdk_ts_contention.cpp"
 	DEFINES VDK_THREAD_SAFE=1
 )
 target_link_libraries( bench_vdk_ts_contention PRIVATE vdk_signals_lib )
 
-add_pulsar_benchmark( bench_vdk_ts_crossthread
+add_stellyra_benchmark( bench_vdk_ts_crossthread
 	"${CMAKE_CURRENT_SOURCE_DIR}/bench_vdk_ts_crossthread.cpp"
 	DEFINES VDK_THREAD_SAFE=1
 )
 target_link_libraries( bench_vdk_ts_crossthread PRIVATE vdk_signals_lib )
 
-add_pulsar_benchmark( bench_vdk_ts_direct
+add_stellyra_benchmark( bench_vdk_ts_direct
 	"${CMAKE_CURRENT_SOURCE_DIR}/bench_vdk_ts_direct.cpp"
 	DEFINES VDK_THREAD_SAFE=1
 )
 target_link_libraries( bench_vdk_ts_direct PRIVATE vdk_signals_lib )
 
-add_pulsar_benchmark( bench_vdk_ts_perreceiver
+add_stellyra_benchmark( bench_vdk_ts_perreceiver
 	"${CMAKE_CURRENT_SOURCE_DIR}/bench_vdk_ts_perreceiver.cpp"
 	DEFINES VDK_THREAD_SAFE=1
 )
 target_link_libraries( bench_vdk_ts_perreceiver PRIVATE vdk_signals_lib )
 
-add_pulsar_benchmark( bench_vdk_ts_threadaffinity
+add_stellyra_benchmark( bench_vdk_ts_threadaffinity
 	"${CMAKE_CURRENT_SOURCE_DIR}/bench_vdk_ts_threadaffinity.cpp"
 	DEFINES VDK_THREAD_SAFE=1
 )

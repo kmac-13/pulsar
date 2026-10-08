@@ -125,7 +125,7 @@ BENCHMARK( BM_CrossThreadDeferred );
 //       -> Receiver::onFired (DirectConnection, runs on Sender's thread)
 //
 // This serialises multi-thread emission to a single thread before dispatch,
-// equivalent to Pulsar's implicit deferred-to-EventLoop behaviour.
+// equivalent to Stellyra's implicit deferred-to-EventLoop behaviour.
 //
 // Sender must live on its own QThread so AutoConnection has a non-main thread
 // to queue to; otherwise AutoConnection degrades to DirectConnection when the
@@ -149,7 +149,7 @@ BENCHMARK( BM_CrossThreadDeferred );
 //
 // This is likely what most Qt engineers use for thread-affinity forwarding.
 // Compare with BM_ThreadAffinityForwarding_InvokeMethod for the faster
-// (but less commonly known) invokeMethod approach, and with Pulsar's
+// (but less commonly known) invokeMethod approach, and with Stellyra's
 // BM_ThreadAffinityForwarding for that library's built-in equivalent.
 //
 // Threads are pre-created and synchronised with a barrier so thread creation
@@ -181,7 +181,7 @@ static void BM_ThreadAffinityForwarding_SignalForwarding( benchmark::State& stat
 	// completion is counted once per emission, not once per receiver - a
 	// separate DirectConnection on the same fired2 signal, anchored on the
 	// last receiver purely so it has a QObject context to be destroyed
-	// with, same convention Pulsar's BM_SenderDeferral_ThreadAffinity uses
+	// with, same convention Stellyra's BM_SenderDeferral_ThreadAffinity uses
 	std::atomic< int > completions{ 0 };
 	QObject::connect(
 		sender.get(), &Sender::fired2,
@@ -268,7 +268,7 @@ BENCHMARK( BM_ThreadAffinityForwarding_SignalForwarding )
 // Avoids the firedRaw -> AutoConnection -> fired2 forwarding chain entirely -
 // one queue post, one signal emission, vs SignalForwarding's one queue post
 // plus two signal emissions.  Compare with BM_ThreadAffinityForwarding_SignalForwarding
-// to see the cost of the forwarding chain, and with Pulsar's BM_ThreadAffinityForwarding
+// to see the cost of the forwarding chain, and with Stellyra's BM_ThreadAffinityForwarding
 // for that library's built-in equivalent.
 // ============================================================================
 

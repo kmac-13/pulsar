@@ -1,4 +1,4 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
 // ---------------------------------------------------------------------------
 // Partial argument matching tests
@@ -28,16 +28,16 @@
 namespace {
 
 template< typename MutexType >
-class Source : public pulsar::Trackable
+class Source : public stellyra::Trackable
 {
 public:
-	pulsar::BasicEvent< MutexType, int > oneArg { this };
-	pulsar::BasicEvent< MutexType, int, int > twoArgs { this };
-	pulsar::BasicEvent< MutexType, int, int, int > threeArgs { this };
-	pulsar::BasicEvent< MutexType, int, std::string > mixedArgs { this };
+	stellyra::BasicEvent< MutexType, int > oneArg { this };
+	stellyra::BasicEvent< MutexType, int, int > twoArgs { this };
+	stellyra::BasicEvent< MutexType, int, int, int > threeArgs { this };
+	stellyra::BasicEvent< MutexType, int, std::string > mixedArgs { this };
 };
 
-class Sink : public pulsar::Trackable
+class Sink : public stellyra::Trackable
 {
 public:
 	int callCount = 0;
@@ -59,9 +59,9 @@ template< typename MutexType >
 class PartialArgs : public ::testing::Test {};
 
 using MutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::SharedMutex,
-	pulsar::platform::NullMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::SharedMutex,
+	stellyra::platform::NullMutex >;
 TYPED_TEST_SUITE( PartialArgs, MutexTypes );
 
 // ---------------------------------------------------------------------------
@@ -242,13 +242,13 @@ TYPED_TEST( PartialArgs, AnchoredReceiverPartialArgs )
 
 		void onOne( int a ) { callCount++; lastA = a; }
 
-		pulsar::Anchor pulsarAnchor;
+		stellyra::Anchor anchor;
 	};
 
 	Source< TypeParam > src;
 	PlainSink sink;
 
-	src.twoArgs.template connect< &PlainSink::onOne >( { sink, sink.pulsarAnchor } );
+	src.twoArgs.template connect< &PlainSink::onOne >( { sink, sink.anchor } );
 	src.twoArgs( 7, 8 );
 
 	EXPECT_EQ( sink.callCount, 1 );
@@ -470,8 +470,8 @@ template< typename MutexType >
 class PartialArgsOnce : public ::testing::Test {};
 
 using OnceCapableMutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::NullMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::NullMutex >;
 TYPED_TEST_SUITE( PartialArgsOnce, OnceCapableMutexTypes );
 
 TYPED_TEST( PartialArgsOnce, ConnectOncePartialArgs )

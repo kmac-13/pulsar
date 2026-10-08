@@ -8,12 +8,12 @@
  *        the baseline) vs. free-function (sigc::ptr_fun) vs. a directly
  *        owned lambda.  libsigc++ has no NTTP-style connection syntax,
  *        so this is member-vs-free-vs-lambda only, not compile-time-vs-
- *        runtime the way Pulsar's 2c/2d also compares.
+ *        runtime the way Stellyra's 2c/2d also compares.
  * 3    - connect/disconnect throughput, via sigc::connection handles
  * 4    - scoped receiver lifetime, via sigc::trackable
  * 8b (approximate) - bulk disconnect via sigc::trackable::notify_callbacks(),
  *        which disconnects a receiver from every signal it's connected to
- *        (no way to scope to one signal, the way Pulsar's
+ *        (no way to scope to one signal, the way Stellyra's
  *        extractConnectionsTo(target) does).  This benchmark connects one
  *        receiver to N different signals and disconnects from all of them
  *        at once, to exercise the same "cost scales with N tracked
@@ -202,7 +202,7 @@ BENCHMARK( BM_ScopedReceiverLifetime );
 // sigc::trackable::notify_callbacks()
 //
 // See the file-level comment above for the granularity caveat versus
-// Pulsar's extractConnectionsTo(target): this disconnects the receiver
+// Stellyra's extractConnectionsTo(target): this disconnects the receiver
 // from EVERY signal it's connected to, not just one.  One receiver is
 // connected to n separate signals; the timed operation is disconnecting
 // from all n at once via a single notify_callbacks() call.

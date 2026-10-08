@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-aggregate_repeated_runs.py -- run a benchmark executable N times as
+aggregate_repeated_runs.py - run a benchmark executable N times as
 separate PROCESSES and synthesize a Google-Benchmark-compatible aggregate
 JSON from the results.
 
@@ -15,9 +15,9 @@ causes to exit non-zero, while `bench_vdk_ts_contention.exe
 --benchmark_format=json --benchmark_out=...` run 5 times in a row as
 separate process launches completes cleanly every time. This is a
 different, distinct manifestation from vdk's already-documented
-thread_local destructor issue (see run_benchmarks.sh's comment on that) --
+thread_local destructor issue (see run_benchmarks.sh's comment on that) -
 this one is specific to repeated in-process invocation of the contention
-benchmark's setup/teardown, not thread creation/destruction as such -- but
+benchmark's setup/teardown, not thread creation/destruction as such - but
 the fix has the same shape: give it its own process per run instead of
 relying on Google Benchmark's own in-process repetition.
 
@@ -29,11 +29,11 @@ What it produces
 A JSON file in the same schema Google Benchmark's own --benchmark_repetitions
 produces: run_type "aggregate", aggregate_name mean/median/stddev/cv, one
 row per statistic per benchmark. compare.py needs no special-casing to
-consume it -- it's indistinguishable from a normal repeated run's output.
+consume it - it's indistinguishable from a normal repeated run's output.
 
 Aggregates are computed from BOTH real_time and cpu_time (mirroring what
 Google Benchmark itself would produce), even though compare.py itself now
-reads real_time only -- see compare.py's load_results() docstring for why.
+reads real_time only - see compare.py's load_results() docstring for why.
 items_per_second, when present, is aggregated the same way.
 
 Usage
@@ -46,7 +46,7 @@ Usage
 Exit status: 0 if at least one of the N runs succeeded (a warning is
 printed for any that didn't, and the aggregate reflects only the
 successful ones); 1 if all N runs failed, in which case no output file is
-written -- matching run_benchmarks.sh's own "missing means failed, never
+written - matching run_benchmarks.sh's own "missing means failed, never
 silently stale" convention for its normal invocation path.
 """
 

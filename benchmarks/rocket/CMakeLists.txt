@@ -34,19 +34,19 @@ endif()
 
 set( ROCKET_INCLUDE_DIR "${rocket_SOURCE_DIR}" )
 
-add_pulsar_benchmark( bench_rocket_st
+add_stellyra_benchmark( bench_rocket_st
 	"${CMAKE_CURRENT_SOURCE_DIR}/bench_rocket.cpp"
 	EXTRA_INCLUDES "${ROCKET_INCLUDE_DIR}"
 	# No ROCKET_THREAD_SAFE: concurrent scenarios excluded
 )
 
-add_pulsar_benchmark( bench_rocket_ts_1
+add_stellyra_benchmark( bench_rocket_ts_1
 	"${CMAKE_CURRENT_SOURCE_DIR}/bench_rocket.cpp"
 	EXTRA_INCLUDES "${ROCKET_INCLUDE_DIR}"
 	DEFINES ROCKET_THREAD_SAFE=1
 )
 
-add_pulsar_benchmark( bench_rocket_ts_2
+add_stellyra_benchmark( bench_rocket_ts_2
 	"${CMAKE_CURRENT_SOURCE_DIR}/bench_rocket_ts_2.cpp"
 	EXTRA_INCLUDES "${ROCKET_INCLUDE_DIR}"
 	DEFINES ROCKET_THREAD_SAFE=1

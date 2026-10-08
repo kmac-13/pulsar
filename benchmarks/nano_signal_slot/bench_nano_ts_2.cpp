@@ -131,7 +131,7 @@ BENCHMARK( BM_ConcurrentEmission_PerReceiver )
 // calling fire() on the SAME shared signal.  nano's TS_Policy serialises the
 //  entire handler-invocation loop under its Spin_Mutex (a hand-rolled atomic
 // spin lock, not a real OS mutex) - this is the genuine article for the
-// "spin lock vs real mutex under contention" question the Pulsar-side
+// "spin lock vs real mutex under contention" question the Stellyra-side
 // SpinLock benchmark was built to investigate.
 // ============================================================================
 

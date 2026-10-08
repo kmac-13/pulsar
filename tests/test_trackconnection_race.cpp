@@ -1,4 +1,4 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
 #include <atomic>
 #include <memory>
@@ -31,7 +31,7 @@
 
 namespace {
 
-class RaceReceiver : public pulsar::Trackable
+class RaceReceiver : public stellyra::Trackable
 {
 public:
 	void onFire() { fireCount.fetch_add( 1, std::memory_order_relaxed ); }
@@ -44,8 +44,8 @@ template< typename MutexType >
 class TrackConnectionRace : public ::testing::Test {};
 
 using TrackConnectionRaceMutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::SharedMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::SharedMutex >;
 TYPED_TEST_SUITE( TrackConnectionRace, TrackConnectionRaceMutexTypes );
 
 TYPED_TEST( TrackConnectionRace, ConnectionsSurviveConcurrentDisconnectAll )
@@ -59,15 +59,15 @@ TYPED_TEST( TrackConnectionRace, ConnectionsSurviveConcurrentDisconnectAll )
 
 		// senders must outlive the trial so connection state can be
 		// queried once both threads have finished
-		std::vector< std::unique_ptr< pulsar::BasicEvent< TypeParam > > > senders( CONNECTIONS_PER_TRIAL );
-		std::vector< pulsar::Connection > connections( CONNECTIONS_PER_TRIAL );
+		std::vector< std::unique_ptr< stellyra::BasicEvent< TypeParam > > > senders( CONNECTIONS_PER_TRIAL );
+		std::vector< stellyra::Connection > connections( CONNECTIONS_PER_TRIAL );
 
 		std::atomic< int > connected{ 0 };
 
 		std::thread connector( [ & ]() {
 			for ( int i = 0; i < CONNECTIONS_PER_TRIAL; ++i )
 			{
-				senders[ i ] = std::make_unique< pulsar::BasicEvent< TypeParam > >();
+				senders[ i ] = std::make_unique< stellyra::BasicEvent< TypeParam > >();
 				connections[ i ] = senders[ i ]->connect( receiver, &RaceReceiver::onFire );
 				connected.fetch_add( 1, std::memory_order_relaxed );
 			}

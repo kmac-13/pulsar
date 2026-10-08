@@ -152,7 +152,7 @@ BENCHMARK( BM_ConcurrentEmission_PerReceiver )
 // during dispatch: shared_lock wraps a plain std::mutex, held only long
 // enough to copy the slot list, not for the duration of handler
 // invocation - not handler execution itself, so this is a narrower
-// "thread-safe" guarantee than Pulsar's/nano's/sigslot's full
+// "thread-safe" guarantee than Stellyra's/nano's/sigslot's full
 // serialisation.  Included anyway since rocket's own policy is genuinely
 // named and documented as thread-safe; the guarantee-level difference is
 // what this comparison exists to make visible, not a reason to exclude it.

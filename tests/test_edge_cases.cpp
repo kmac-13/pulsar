@@ -1,4 +1,4 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
 #include <atomic>
 
@@ -24,9 +24,9 @@ template< typename MutexType >
 class EdgeCases : public ::testing::Test {};
 
 using MutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::SharedMutex,
-	pulsar::platform::NullMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::SharedMutex,
+	stellyra::platform::NullMutex >;
 TYPED_TEST_SUITE( EdgeCases, MutexTypes );
 
 TYPED_TEST( EdgeCases, EventForwarding )
@@ -74,7 +74,7 @@ TYPED_TEST( EdgeCases, EmptyEventEmission )
 	// shouldn't throw when there are no connections
 	EXPECT_NO_THROW( button->click( 1, 1 ) );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().connectionCount, 0u );
 }
 
@@ -119,10 +119,10 @@ TYPED_TEST( EdgeCases, NullSenderEvent )
 	// an Event constructed with nullptr sender has no associated Trackable,
 	// but it should still connect and emit without crashing, behaving as
 	// a plain Direct-connection event with no sender lifetime tracking
-	auto handler = std::make_shared< pulsar::Trackable >();
+	auto handler = std::make_shared< stellyra::Trackable >();
 	int callCount = 0;
 
-	pulsar::BasicEvent< TypeParam, std::string > event{ nullptr };
+	stellyra::BasicEvent< TypeParam, std::string > event{ nullptr };
 
 	event.connectLambda( *handler, [ &callCount ]( const std::string& ) { callCount++; } );
 
@@ -193,8 +193,8 @@ template< typename MutexType >
 class EdgeCasesReentrant : public ::testing::Test {};
 
 using ReentrantMutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::NullMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::NullMutex >;
 TYPED_TEST_SUITE( EdgeCasesReentrant, ReentrantMutexTypes );
 
 TYPED_TEST( EdgeCasesReentrant, SelfDisconnectionDuringEmission )
@@ -202,7 +202,7 @@ TYPED_TEST( EdgeCasesReentrant, SelfDisconnectionDuringEmission )
 	auto button = std::make_shared< TestButtonT< TypeParam > >();
 	auto handler = std::make_shared< TestHandler >();
 
-	pulsar::Connection conn;
+	stellyra::Connection conn;
 	conn = button->clicked.connectLambda( *handler, [ &handler, &conn ]( int, int ) {
 		handler->callCount++;
 		conn.disconnect();

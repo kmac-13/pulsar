@@ -15,7 +15,7 @@
  * Scenario 2c (lambda variant): N/A - nano's connect(L& instance) takes a
  * reference to an externally-owned functor object and stores a pointer to
  * it, rather than moving/copying the callable into internally-owned storage
- * the way Pulsar/Qt/libsigc++/rocket/nod/sigslot all do for their own
+ * the way Stellyra/Qt/libsigc++/rocket/nod/sigslot all do for their own
  * direct-lambda connect.  A temporary lambda passed this way would dangle
  * immediately - there's no equivalent operation here to benchmark, not just
  * an unwritten one.

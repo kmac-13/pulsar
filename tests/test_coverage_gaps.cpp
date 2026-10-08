@@ -1,6 +1,6 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
-#include <kmac/pulsar/event_loop.h>
+#include <kmac/stellyra/event_loop.h>
 
 #include <atomic>
 #include <sstream>
@@ -10,10 +10,10 @@
 // PrivateEvent
 // ---------------------------------------------------------------------------
 
-class SecureButton : public pulsar::Trackable
+class SecureButton : public stellyra::Trackable
 {
 public:
-	pulsar::PEvent< SecureButton, int, int > clicked{ this };
+	stellyra::PEvent< SecureButton, int, int > clicked{ this };
 
 	void click( int x, int y )
 	{
@@ -70,7 +70,7 @@ TEST( PrivateEvent, InspectorAccess )
 	button->clicked.connect( *handler, &TestHandler::onClicked );
 
 	// EventInspector can inspect a PrivateEvent
-	auto inspector = pulsar::EventInspector( button->clicked );
+	auto inspector = stellyra::EventInspector( button->clicked );
 	auto info = inspector.getEventInfo();
 	EXPECT_EQ( info.connectionCount, 1u );
 	EXPECT_EQ( info.activeConnectionCount, 1u );
@@ -91,7 +91,7 @@ TEST( EventInspector, DumpConnectionsToString )
 	auto handler = std::make_shared< TestHandler >();
 	button->clicked.connect( *handler, &TestHandler::onClicked );
 
-	auto inspector = pulsar::EventInspector( button->clicked );
+	auto inspector = stellyra::EventInspector( button->clicked );
 	auto str = inspector.dumpConnectionsToString();
 
 	EXPECT_NE( str.find( "method" ), std::string::npos );
@@ -106,7 +106,7 @@ TEST( EventInspector, DumpConnectionGraph )
 	auto handler = std::make_shared< TestHandler >();
 	button->clicked.connect( *handler, &TestHandler::onClicked );
 
-	auto inspector = pulsar::EventInspector( button->clicked );
+	auto inspector = stellyra::EventInspector( button->clicked );
 	std::ostringstream oss;
 	inspector.dumpConnectionGraph( oss );
 
@@ -120,7 +120,7 @@ TEST( EventInspector, GetSummary )
 	auto handler = std::make_shared< TestHandler >();
 	button->clicked.connect( *handler, &TestHandler::onClicked );
 
-	auto inspector = pulsar::EventInspector( button->clicked );
+	auto inspector = stellyra::EventInspector( button->clicked );
 	auto summary = inspector.getSummary();
 
 	EXPECT_NE( summary.find( "Total" ),  std::string::npos );
@@ -132,16 +132,16 @@ TEST( EventInspector, ToDotString )
 	auto button = std::make_shared< TestButton >();
 	auto handler = std::make_shared< TestHandler >();
 	button->clicked.connect( *handler, &TestHandler::onClicked );
-	auto blockedConn = button->clicked.connect( *handler, &TestHandler::onClicked, pulsar::ConnectionType::Deferred );
+	auto blockedConn = button->clicked.connect( *handler, &TestHandler::onClicked, stellyra::ConnectionType::Deferred );
 
 	button->clicked.connectFree( []( int, int ) {} );
 
 	blockedConn.block();
 
-	auto inspector = pulsar::EventInspector( button->clicked );
+	auto inspector = stellyra::EventInspector( button->clicked );
 	auto dot = inspector.toDotString();
 
-	EXPECT_NE( dot.find( "digraph PulsarConnections" ), std::string::npos );
+	EXPECT_NE( dot.find( "digraph StellyraConnections" ), std::string::npos );
 	EXPECT_NE( dot.find( "rankdir=LR" ), std::string::npos );
 	EXPECT_NE( dot.find( "TestButton" ), std::string::npos );
 	EXPECT_NE( dot.find( "method" ), std::string::npos );  // method node label, not the real receiver type
@@ -163,7 +163,7 @@ TEST( EventInspector, ConnectionInfoDetails )
 
 	auto conn = button->clicked.connect( *handler, &TestHandler::onClicked, 42 );
 
-	auto inspector = pulsar::EventInspector( button->clicked );
+	auto inspector = stellyra::EventInspector( button->clicked );
 	auto infos = inspector.getConnectionInfo();
 
 	ASSERT_EQ( infos.size(), 1u );
@@ -187,7 +187,7 @@ TEST( ConnectionGuard, BasicUsage )
 	auto button = std::make_shared< TestButton >();
 	auto handler = std::make_shared< TestHandler >();
 
-	pulsar::ConnectionGuard guard( button->clicked.connect( *handler, &TestHandler::onClicked ) );
+	stellyra::ConnectionGuard guard( button->clicked.connect( *handler, &TestHandler::onClicked ) );
 
 	EXPECT_TRUE( guard.isConnected() );
 
@@ -206,7 +206,7 @@ TEST( ConnectionGuard, BlockAndUnblock )
 	auto button = std::make_shared< TestButton >();
 	auto handler = std::make_shared< TestHandler >();
 
-	pulsar::ConnectionGuard guard( button->clicked.connect( *handler, &TestHandler::onClicked ) );
+	stellyra::ConnectionGuard guard( button->clicked.connect( *handler, &TestHandler::onClicked ) );
 
 	guard.block();
 	EXPECT_TRUE( guard.isBlocked() );
@@ -229,7 +229,7 @@ TEST( ConnectionGuard, DisconnectThenDestroy )
 	auto handler = std::make_shared< TestHandler >();
 
 	{
-		pulsar::ConnectionGuard guard( button->clicked.connect( *handler, &TestHandler::onClicked ) );
+		stellyra::ConnectionGuard guard( button->clicked.connect( *handler, &TestHandler::onClicked ) );
 
 		button->click( 1, 1 );
 		EXPECT_EQ( handler->callCount, 1 );
@@ -251,10 +251,10 @@ TEST( ConnectionGuard, MoveConstructionTransfersConnection )
 	auto button = std::make_shared< TestButton >();
 	auto handler = std::make_shared< TestHandler >();
 
-	pulsar::ConnectionGuard guard1( button->clicked.connect( *handler, &TestHandler::onClicked ) );
+	stellyra::ConnectionGuard guard1( button->clicked.connect( *handler, &TestHandler::onClicked ) );
 	EXPECT_TRUE( guard1.isConnected() );
 
-	pulsar::ConnectionGuard guard2( std::move( guard1 ) );
+	stellyra::ConnectionGuard guard2( std::move( guard1 ) );
 
 	// the connection is now owned by guard2
 	EXPECT_TRUE( guard2.isConnected() );
@@ -287,8 +287,8 @@ TEST( ConnectionGuard, MoveAssignmentReplacesWrappedConnectionWithoutDisconnecti
 	auto oldHandler = std::make_shared< TestHandler >();
 	auto newHandler = std::make_shared< TestHandler >();
 
-	pulsar::ConnectionGuard guard( button->clicked.connect( *oldHandler, &TestHandler::onClicked ) );
-	pulsar::ConnectionGuard incoming( button->clicked.connect( *newHandler, &TestHandler::onClicked ) );
+	stellyra::ConnectionGuard guard( button->clicked.connect( *oldHandler, &TestHandler::onClicked ) );
+	stellyra::ConnectionGuard incoming( button->clicked.connect( *newHandler, &TestHandler::onClicked ) );
 
 	button->click( 1, 1 );
 	EXPECT_EQ( oldHandler->callCount, 1 );
@@ -317,12 +317,12 @@ TEST( ConnectionGuard, SelfMoveAssignmentIsNoOp )
 	auto button = std::make_shared< TestButton >();
 	auto handler = std::make_shared< TestHandler >();
 
-	pulsar::ConnectionGuard guard( button->clicked.connect( *handler, &TestHandler::onClicked ) );
+	stellyra::ConnectionGuard guard( button->clicked.connect( *handler, &TestHandler::onClicked ) );
 
 	// obscure the self-assignment behind a pointer so the compiler can't
 	// diagnose (or elide) it as a no-op at compile time - this exercises the
 	// `if ( this != &other )` guard in operator= at runtime
-	pulsar::ConnectionGuard* self = &guard;
+	stellyra::ConnectionGuard* self = &guard;
 	EXPECT_NO_THROW( guard = std::move( *self ) );
 
 	// must still be usable and still own its connection afterward
@@ -344,7 +344,7 @@ TEST( ConnectionGuardConcurrency, ConcurrentAccessDuringMoveIsSafe )
 	auto button = std::make_shared< TestButton >();
 	auto handler = std::make_shared< TestHandler >();
 
-	pulsar::ConnectionGuard guard( button->clicked.connect( *handler, &TestHandler::onClicked ) );
+	stellyra::ConnectionGuard guard( button->clicked.connect( *handler, &TestHandler::onClicked ) );
 
 	std::atomic< bool > running{ true };
 	std::atomic< int > moveCount{ 0 };
@@ -353,7 +353,7 @@ TEST( ConnectionGuardConcurrency, ConcurrentAccessDuringMoveIsSafe )
 	std::thread mover( [ & ]() {
 		while ( running )
 		{
-			pulsar::ConnectionGuard fresh( button->clicked.connect( *handler, &TestHandler::onClicked ) );
+			stellyra::ConnectionGuard fresh( button->clicked.connect( *handler, &TestHandler::onClicked ) );
 			guard = std::move( fresh );
 			moveCount.fetch_add( 1, std::memory_order_relaxed );
 		}
@@ -390,8 +390,8 @@ TEST( ConnectionGuardConcurrency, CrossAssignmentDoesNotDeadlock )
 	auto h1 = std::make_shared< TestHandler >();
 	auto h2 = std::make_shared< TestHandler >();
 
-	pulsar::ConnectionGuard g1( button->clicked.connect( *h1, &TestHandler::onClicked ) );
-	pulsar::ConnectionGuard g2( button->clicked.connect( *h2, &TestHandler::onClicked ) );
+	stellyra::ConnectionGuard g1( button->clicked.connect( *h1, &TestHandler::onClicked ) );
+	stellyra::ConnectionGuard g2( button->clicked.connect( *h2, &TestHandler::onClicked ) );
 
 	std::atomic< bool > running{ true };
 	std::atomic< int > iters1{ 0 };
@@ -432,7 +432,7 @@ TEST( ConnectionGroup, CleanupRemovesDeadConnections )
 	auto button = std::make_shared< TestButton >();
 	auto handler = std::make_shared< TestHandler >();
 
-	pulsar::ConnectionGroup group;
+	stellyra::ConnectionGroup group;
 	group += button->clicked.connect( *handler, &TestHandler::onClicked );
 	group += button->clicked.connect( *handler, &TestHandler::onClicked );
 	group += button->clicked.connect( *handler, &TestHandler::onClicked );
@@ -454,7 +454,7 @@ TEST( ConnectionGroup, HasActiveConnections )
 	auto button = std::make_shared< TestButton >();
 	auto handler = std::make_shared< TestHandler >();
 
-	pulsar::ConnectionGroup group;
+	stellyra::ConnectionGroup group;
 	EXPECT_FALSE( group.hasActiveConnections() );
 
 	group += button->clicked.connect( *handler, &TestHandler::onClicked );
@@ -469,7 +469,7 @@ TEST( ConnectionGroup, Release )
 	auto button = std::make_shared< TestButton >();
 	auto handler = std::make_shared< TestHandler >();
 
-	pulsar::ConnectionGroup group;
+	stellyra::ConnectionGroup group;
 	group += button->clicked.connect( *handler, &TestHandler::onClicked );
 	group += button->clicked.connect( *handler, &TestHandler::onClicked );
 
@@ -489,7 +489,7 @@ TEST( ConnectionGroup, RangeFor )
 	auto button = std::make_shared< TestButton >();
 	auto handler = std::make_shared< TestHandler >();
 
-	pulsar::ConnectionGroup group;
+	stellyra::ConnectionGroup group;
 	group += button->clicked.connect( *handler, &TestHandler::onClicked );
 	group += button->clicked.connect( *handler, &TestHandler::onClicked );
 	group += button->clicked.connect( *handler, &TestHandler::onClicked );
@@ -508,7 +508,7 @@ TEST( ConnectionGroup, IndexedAccess )
 	auto button = std::make_shared< TestButton >();
 	auto handler = std::make_shared< TestHandler >();
 
-	pulsar::ConnectionGroup group;
+	stellyra::ConnectionGroup group;
 	group += button->clicked.connect( *handler, &TestHandler::onClicked );
 	group += button->clicked.connect( *handler, &TestHandler::onClicked );
 
@@ -529,12 +529,12 @@ TEST( ConnectionGroup, MoveConstructionTransfersWithoutDisconnecting )
 	auto button = std::make_shared< TestButton >();
 	auto handler = std::make_shared< TestHandler >();
 
-	pulsar::ConnectionGroup group1;
+	stellyra::ConnectionGroup group1;
 	group1 += button->clicked.connect( *handler, &TestHandler::onClicked );
 	group1 += button->clicked.connect( *handler, &TestHandler::onClicked );
 	group1 += button->clicked.connect( *handler, &TestHandler::onClicked );
 
-	pulsar::ConnectionGroup group2( std::move( group1 ) );
+	stellyra::ConnectionGroup group2( std::move( group1 ) );
 
 	// all 3 connections transferred, still active, still fire
 	EXPECT_EQ( group2.size(), 3u );
@@ -556,11 +556,11 @@ TEST( ConnectionGroup, MoveAssignmentDisconnectsCurrentThenTakesOwnership )
 	auto oldHandler = std::make_shared< TestHandler >();
 	auto newHandler = std::make_shared< TestHandler >();
 
-	pulsar::ConnectionGroup group;
+	stellyra::ConnectionGroup group;
 	group += button->clicked.connect( *oldHandler, &TestHandler::onClicked );
 	group += button->clicked.connect( *oldHandler, &TestHandler::onClicked );
 
-	pulsar::ConnectionGroup incoming;
+	stellyra::ConnectionGroup incoming;
 	incoming += button->clicked.connect( *newHandler, &TestHandler::onClicked );
 
 	button->click( 1, 1 );
@@ -584,7 +584,7 @@ TEST( ConnectionGroup, SelfMoveAssignmentIsNoOp )
 	auto button = std::make_shared< TestButton >();
 	auto handler = std::make_shared< TestHandler >();
 
-	pulsar::ConnectionGroup group;
+	stellyra::ConnectionGroup group;
 	group += button->clicked.connect( *handler, &TestHandler::onClicked );
 	group += button->clicked.connect( *handler, &TestHandler::onClicked );
 
@@ -595,7 +595,7 @@ TEST( ConnectionGroup, SelfMoveAssignmentIsNoOp )
 	// connections and then try to move-assign from the now-empty vector it
 	// just destroyed - group would very plausibly still end up empty rather
 	// than retaining its two connections.
-	pulsar::ConnectionGroup* self = &group;
+	stellyra::ConnectionGroup* self = &group;
 	EXPECT_NO_THROW( group = std::move( *self ) );
 
 	// must still hold both connections, unaffected
@@ -610,10 +610,10 @@ TEST( ConnectionGroup, MovedFromGroupIsSafeToReuse )
 	auto button = std::make_shared< TestButton >();
 	auto handler = std::make_shared< TestHandler >();
 
-	pulsar::ConnectionGroup group1;
+	stellyra::ConnectionGroup group1;
 	group1 += button->clicked.connect( *handler, &TestHandler::onClicked );
 
-	pulsar::ConnectionGroup group2( std::move( group1 ) );
+	stellyra::ConnectionGroup group2( std::move( group1 ) );
 	(void)group2;
 
 	// group1 (moved-from) must still be a fully functional empty group -
@@ -639,10 +639,10 @@ TEST( ScopedConnection, Release )
 
 	// release() returns void (it just stops the wrapper from disconnecting
 	// on destruction) - keep our own copy of the Connection to use afterward
-	pulsar::Connection conn = button->clicked.connect( *handler, &TestHandler::onClicked );
+	stellyra::Connection conn = button->clicked.connect( *handler, &TestHandler::onClicked );
 
 	{
-		pulsar::ScopedConnection scoped( conn );
+		stellyra::ScopedConnection scoped( conn );
 		EXPECT_TRUE( scoped.isConnected() );
 
 		scoped.release();  // prevent auto-disconnect on scope exit
@@ -670,8 +670,8 @@ TEST( ScopedConnection, Release )
 
 TEST( Trackable, DisconnectAllThenSetEventLoop )
 {
-	pulsar::EventLoop loop1;
-	pulsar::EventLoop loop2;
+	stellyra::EventLoop loop1;
+	stellyra::EventLoop loop2;
 	auto sender = std::make_shared< DataSender >();
 	auto receiver = std::make_shared< DataReceiver >();
 
@@ -700,14 +700,14 @@ TEST( Trackable, DisconnectAllThenSetEventLoop )
 
 TEST( MoveOnlyCapture, WorksOnDeferredConnection )
 {
-	pulsar::EventLoop loop;
-	pulsar::Trackable sender;
-	pulsar::Trackable receiver;
+	stellyra::EventLoop loop;
+	stellyra::Trackable sender;
+	stellyra::Trackable receiver;
 
 	sender.setEventLoop( &loop );
 	receiver.setEventLoop( &loop );
 
-	pulsar::Event< int > event{ &sender };
+	stellyra::Event< int > event{ &sender };
 
 	auto ptr = std::make_unique< int >( 42 );
 	std::atomic< bool > handlerCalled{ false };
@@ -717,7 +717,7 @@ TEST( MoveOnlyCapture, WorksOnDeferredConnection )
 		[ p = std::move( ptr ), &handlerCalled ]( int ) mutable {
 			handlerCalled = ( *p == 42 );
 		},
-		pulsar::ConnectionType::Deferred );
+		stellyra::ConnectionType::Deferred );
 
 	event( 1 );
 	loop.drain();  // drain sender deferral

@@ -87,7 +87,7 @@ set( SIGCPP_SOURCES
 )
 
 # A single list combining the benchmark source with libsigc++'s sources -
-# add_pulsar_benchmark's source_file parameter accepts this unmodified:
+# add_stellyra_benchmark's source_file parameter accepts this unmodified:
 # CMake splits any unquoted semicolon-separated list into multiple
 # add_executable() sources automatically, so every file below becomes its
 # own translation unit in the SAME target, verified directly.
@@ -96,7 +96,7 @@ set( BENCH_LIBSIGCPP_ALL_SOURCES
 	${SIGCPP_SOURCES}
 )
 
-add_pulsar_benchmark( bench_libsigcpp
+add_stellyra_benchmark( bench_libsigcpp
 	"${BENCH_LIBSIGCPP_ALL_SOURCES}"
 	EXTRA_INCLUDES
 		"${LIBSIGCPP_SOURCE_DIR}"

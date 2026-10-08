@@ -1,7 +1,7 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
-#include <kmac/pulsar/event_loop.h>
-#include <kmac/pulsar/auto_drain_thread.h>
+#include <kmac/stellyra/event_loop.h>
+#include <kmac/stellyra/auto_drain_thread.h>
 
 #include <atomic>
 #include <chrono>
@@ -16,9 +16,9 @@
 //
 // This serialises all emissions to a single context without requiring the
 // caller to hold any locks, and is similar to Qt's thread affinity, except
-// Pulsar defers the emission itself if outside of the sender's EventLoop/thread
+// Stellyra defers the emission itself if outside of the sender's EventLoop/thread
 // context while Qt processes the emission synchronously from whichever thread
-// called it.  Using EventLoop, Pulsar can have multiple manual loops coexist
+// called it.  Using EventLoop, Stellyra can have multiple manual loops coexist
 // on one thread and still dispatch correctly.
 //
 // If the sender has no associated EventLoop, emissions always run directly
@@ -40,9 +40,9 @@ template< typename MutexType >
 class SenderDeferral : public ::testing::Test {};
 
 using MutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::SharedMutex,
-	pulsar::platform::NullMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::SharedMutex,
+	stellyra::platform::NullMutex >;
 TYPED_TEST_SUITE( SenderDeferral, MutexTypes );
 
 // ---------------------------------------------------------------------------
@@ -51,10 +51,10 @@ TYPED_TEST_SUITE( SenderDeferral, MutexTypes );
 
 TYPED_TEST( SenderDeferral, NoLoopIsAlwaysDirect )
 {
-	pulsar::Trackable sender;  // no loop
-	pulsar::Trackable receiver;
+	stellyra::Trackable sender;  // no loop
+	stellyra::Trackable receiver;
 
-	pulsar::BasicEvent< TypeParam, int > event{ &sender };
+	stellyra::BasicEvent< TypeParam, int > event{ &sender };
 
 	std::atomic< int > callCount{ 0 };
 	event.connectLambda( receiver, [ &callCount ]( int ) { callCount++; } );
@@ -72,16 +72,16 @@ TYPED_TEST( SenderDeferral, NoLoopIsAlwaysDirect )
 
 TYPED_TEST( SenderDeferral, ManualLoopDefersUntilDrain )
 {
-	pulsar::EventLoop loop;
-	pulsar::Trackable sender;
-	pulsar::Trackable receiver;
+	stellyra::EventLoop loop;
+	stellyra::Trackable sender;
+	stellyra::Trackable receiver;
 
 	sender.setEventLoop( &loop );
 
-	pulsar::BasicEvent< TypeParam, int > event{ &sender };
+	stellyra::BasicEvent< TypeParam, int > event{ &sender };
 
 	std::atomic< int > callCount{ 0 };
-	event.connectLambda( receiver, [ &callCount ]( int ) { callCount++; }, pulsar::ConnectionType::Direct );
+	event.connectLambda( receiver, [ &callCount ]( int ) { callCount++; }, stellyra::ConnectionType::Direct );
 
 	// emit from outside the drain - should be deferred, not executed yet
 	event( 1 );
@@ -101,21 +101,21 @@ TYPED_TEST( SenderDeferral, ManualLoopDefersUntilDrain )
 
 TYPED_TEST( SenderDeferral, EmitFromInsideDrainIsDirect )
 {
-	pulsar::EventLoop loop;
-	pulsar::Trackable sender;
-	pulsar::Trackable receiver;
+	stellyra::EventLoop loop;
+	stellyra::Trackable sender;
+	stellyra::Trackable receiver;
 
 	sender.setEventLoop( &loop );
 
-	pulsar::BasicEvent< TypeParam, int > event{ &sender };
+	stellyra::BasicEvent< TypeParam, int > event{ &sender };
 
 	std::atomic< int > callCount{ 0 };
 	std::atomic< bool > handledImmediately{ false };
 
-	event.connectLambda( receiver, [ &callCount ]( int ) { callCount++; }, pulsar::ConnectionType::Direct );
+	event.connectLambda( receiver, [ &callCount ]( int ) { callCount++; }, stellyra::ConnectionType::Direct );
 
 	// post a task that emits from within the drain context
-	loop.post( pulsar::EventLoop::Task::create( [ & ]() {
+	loop.post( stellyra::EventLoop::Task::create( [ & ]() {
 		event( 42 );
 		// if deferral happened, callCount would still be 0 here;
 		// if direct, it is already 1
@@ -134,24 +134,24 @@ TYPED_TEST( SenderDeferral, EmitFromInsideDrainIsDirect )
 
 TYPED_TEST( SenderDeferral, TwoManualLoopsInOneThread )
 {
-	pulsar::EventLoop loop1;
-	pulsar::EventLoop loop2;
+	stellyra::EventLoop loop1;
+	stellyra::EventLoop loop2;
 
-	pulsar::Trackable sender1;
-	pulsar::Trackable sender2;
-	pulsar::Trackable receiver;
+	stellyra::Trackable sender1;
+	stellyra::Trackable sender2;
+	stellyra::Trackable receiver;
 
 	sender1.setEventLoop( &loop1 );
 	sender2.setEventLoop( &loop2 );
 
-	pulsar::BasicEvent< TypeParam, int > event1{ &sender1 };
-	pulsar::BasicEvent< TypeParam, int > event2{ &sender2 };
+	stellyra::BasicEvent< TypeParam, int > event1{ &sender1 };
+	stellyra::BasicEvent< TypeParam, int > event2{ &sender2 };
 
 	std::atomic< int > count1{ 0 };
 	std::atomic< int > count2{ 0 };
 
-	event1.connectLambda( receiver, [ &count1 ]( int ) { count1++; }, pulsar::ConnectionType::Direct );
-	event2.connectLambda( receiver, [ &count2 ]( int ) { count2++; }, pulsar::ConnectionType::Direct );
+	event1.connectLambda( receiver, [ &count1 ]( int ) { count1++; }, stellyra::ConnectionType::Direct );
+	event2.connectLambda( receiver, [ &count2 ]( int ) { count2++; }, stellyra::ConnectionType::Direct );
 
 	// emit both - both should be deferred to their respective loops
 	event1( 1 );
@@ -182,8 +182,8 @@ TYPED_TEST( SenderDeferral, TwoManualLoopsInOneThread )
 
 TYPED_TEST( SenderDeferral, DeferralWithDeferredReceiver )
 {
-	pulsar::EventLoop senderLoop;
-	pulsar::EventLoop receiverLoop;
+	stellyra::EventLoop senderLoop;
+	stellyra::EventLoop receiverLoop;
 
 	DataSenderT< TypeParam > sender;
 	DataReceiver receiver;
@@ -220,18 +220,18 @@ TYPED_TEST( SenderDeferral, DeferralWithDeferredReceiver )
 
 TYPED_TEST( SenderDeferral, RegisteredThreadFiresDirectlyWhenIdle )
 {
-	pulsar::EventLoop loop;
-	pulsar::Trackable sender;
-	pulsar::Trackable receiver;
+	stellyra::EventLoop loop;
+	stellyra::Trackable sender;
+	stellyra::Trackable receiver;
 
 	sender.setEventLoop( &loop );
-	pulsar::BasicEvent< TypeParam, int > event{ &sender };
+	stellyra::BasicEvent< TypeParam, int > event{ &sender };
 
 	int callCount = 0;
-	event.connectLambda( receiver, [ &callCount ]( int ) { callCount++; }, pulsar::ConnectionType::Direct );
+	event.connectLambda( receiver, [ &callCount ]( int ) { callCount++; }, stellyra::ConnectionType::Direct );
 
 	// register the current thread without ever calling drain()
-	loop.setDrainThread( pulsar::platform::currentThreadId() );
+	loop.setDrainThread( stellyra::platform::currentThreadId() );
 
 	event( 1 );
 
@@ -247,8 +247,8 @@ template< typename MutexType >
 class SenderDeferralThreadSafe : public ::testing::Test {};
 
 using ThreadSafeMutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::SharedMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::SharedMutex >;
 TYPED_TEST_SUITE( SenderDeferralThreadSafe, ThreadSafeMutexTypes );
 
 // ---------------------------------------------------------------------------
@@ -257,18 +257,18 @@ TYPED_TEST_SUITE( SenderDeferralThreadSafe, ThreadSafeMutexTypes );
 
 TYPED_TEST( SenderDeferralThreadSafe, AutoLoopDefersFromOtherThread )
 {
-	pulsar::EventLoop loop;
-	pulsar::AutoDrainThread drainer( loop );
+	stellyra::EventLoop loop;
+	stellyra::AutoDrainThread drainer( loop );
 
-	pulsar::Trackable sender;
-	pulsar::Trackable receiver;
+	stellyra::Trackable sender;
+	stellyra::Trackable receiver;
 
 	sender.setEventLoop( &loop );
 
-	pulsar::BasicEvent< TypeParam, int > event{ &sender };
+	stellyra::BasicEvent< TypeParam, int > event{ &sender };
 
 	std::atomic< int > callCount{ 0 };
-	event.connectLambda( receiver, [ &callCount ]( int ) { callCount++; }, pulsar::ConnectionType::Direct );
+	event.connectLambda( receiver, [ &callCount ]( int ) { callCount++; }, stellyra::ConnectionType::Direct );
 
 	// emit from a separate thread - should be deferred to the loop
 	std::thread t( [ & ]() { event( 99 ); } );
@@ -289,14 +289,14 @@ TYPED_TEST( SenderDeferralThreadSafe, AutoLoopDefersFromOtherThread )
 
 TYPED_TEST( SenderDeferralThreadSafe, OwnedLoopSerialisation )
 {
-	class DataSource : public pulsar::Trackable
+	class DataSource : public stellyra::Trackable
 	{
 	private:
-		pulsar::EventLoop _loop;
-		pulsar::AutoDrainThread _drainer;
+		stellyra::EventLoop _loop;
+		stellyra::AutoDrainThread _drainer;
 
 	public:
-		pulsar::BasicEvent< TypeParam, int > dataReady{ this };
+		stellyra::BasicEvent< TypeParam, int > dataReady{ this };
 
 		DataSource()
 			: _drainer( _loop )
@@ -312,11 +312,11 @@ TYPED_TEST( SenderDeferralThreadSafe, OwnedLoopSerialisation )
 	};
 
 	DataSource source;
-	pulsar::Trackable receiver;
+	stellyra::Trackable receiver;
 
 	std::atomic< int > callCount{ 0 };
 	source.dataReady.connectLambda( receiver,
-		[ &callCount ]( int ) { callCount++; }, pulsar::ConnectionType::Direct );
+		[ &callCount ]( int ) { callCount++; }, stellyra::ConnectionType::Direct );
 
 	// call produce from two threads simultaneously - both should be safely deferred
 	std::thread t1( [ & ]() { source.produce( 1 ); } );
@@ -337,13 +337,13 @@ TYPED_TEST( SenderDeferralThreadSafe, OwnedLoopSerialisation )
 
 TYPED_TEST( SenderDeferralThreadSafe, NestedEmissionOnDrainThreadStaysDirect )
 {
-	pulsar::EventLoop loop;
-	pulsar::AutoDrainThread drainer( loop );
+	stellyra::EventLoop loop;
+	stellyra::AutoDrainThread drainer( loop );
 
-	pulsar::Trackable sender;
-	pulsar::Trackable receiver;
+	stellyra::Trackable sender;
+	stellyra::Trackable receiver;
 	sender.setEventLoop( &loop );
-	pulsar::BasicEvent< TypeParam, int > event{ &sender };
+	stellyra::BasicEvent< TypeParam, int > event{ &sender };
 
 	std::atomic< int > depth{ 0 };
 	std::atomic< bool > nestedFired{ false };
@@ -361,7 +361,7 @@ TYPED_TEST( SenderDeferralThreadSafe, NestedEmissionOnDrainThreadStaysDirect )
 			nestedFired = true;
 		}
 		--depth;
-	}, pulsar::ConnectionType::Direct );
+	}, stellyra::ConnectionType::Direct );
 
 	// first trigger comes from a different thread - must defer to the drain thread
 	std::thread worker( [ & ]() { event( 1 ); } );

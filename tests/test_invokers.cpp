@@ -1,7 +1,7 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
-#include <kmac/pulsar/event_loop.h>
-#include <kmac/pulsar/auto_drain_thread.h>
+#include <kmac/stellyra/event_loop.h>
+#include <kmac/stellyra/auto_drain_thread.h>
 
 #include <atomic>
 #include <chrono>
@@ -41,13 +41,13 @@
 namespace {
 
 template< typename EventT >
-class InvokerSender : public pulsar::Trackable
+class InvokerSender : public stellyra::Trackable
 {
 public:
 	EventT fired{ this };
 };
 
-class InvokerReceiver : public pulsar::Trackable
+class InvokerReceiver : public stellyra::Trackable
 {
 public:
 	std::atomic< int > last{ -1 };
@@ -65,15 +65,15 @@ template< typename EventT >
 class Invokers : public ::testing::Test {};
 
 using EventTypes = ::testing::Types<
-	pulsar::Event< int >,
-	pulsar::SharedEvent< int > >;
+	stellyra::Event< int >,
+	stellyra::SharedEvent< int > >;
 TYPED_TEST_SUITE( Invokers, EventTypes );
 
 TYPED_TEST( Invokers, DirectConnection )
 {
 	InvokerSender< TypeParam > sender;
 	InvokerReceiver receiver;
-	sender.fired.connect( receiver, &InvokerReceiver::onFired, pulsar::ConnectionType::Direct );
+	sender.fired.connect( receiver, &InvokerReceiver::onFired, stellyra::ConnectionType::Direct );
 	sender.fired( 42 );
 	EXPECT_EQ( receiver.last, 42 );
 	EXPECT_EQ( receiver.callCount, 1 );
@@ -81,14 +81,14 @@ TYPED_TEST( Invokers, DirectConnection )
 
 TYPED_TEST( Invokers, DeferredLoopSetBeforeConnect )
 {
-	pulsar::EventLoop loop;
-	pulsar::AutoDrainThread drainer( loop );
+	stellyra::EventLoop loop;
+	stellyra::AutoDrainThread drainer( loop );
 
 	InvokerSender< TypeParam > sender;
 	InvokerReceiver receiver;
 	receiver.setEventLoop( &loop );
 
-	sender.fired.connect( receiver, &InvokerReceiver::onFired, pulsar::ConnectionType::Deferred );
+	sender.fired.connect( receiver, &InvokerReceiver::onFired, stellyra::ConnectionType::Deferred );
 	sender.fired( 100 );
 
 	msleep( 50 );
@@ -101,7 +101,7 @@ TYPED_TEST( Invokers, DeferredNoLoopIsDropped )
 	InvokerSender< TypeParam > sender;
 	InvokerReceiver receiver;
 
-	sender.fired.connect( receiver, &InvokerReceiver::onFired, pulsar::ConnectionType::Deferred );
+	sender.fired.connect( receiver, &InvokerReceiver::onFired, stellyra::ConnectionType::Deferred );
 	sender.fired( 200 );
 
 	msleep( 10 );
@@ -111,13 +111,13 @@ TYPED_TEST( Invokers, DeferredNoLoopIsDropped )
 
 TYPED_TEST( Invokers, DeferredLoopGainedAfterConnect )
 {
-	pulsar::EventLoop loop;
-	pulsar::AutoDrainThread drainer( loop );
+	stellyra::EventLoop loop;
+	stellyra::AutoDrainThread drainer( loop );
 
 	InvokerSender< TypeParam > sender;
 	InvokerReceiver receiver;
 
-	sender.fired.connect( receiver, &InvokerReceiver::onFired, pulsar::ConnectionType::Deferred );
+	sender.fired.connect( receiver, &InvokerReceiver::onFired, stellyra::ConnectionType::Deferred );
 
 	// emit while no loop - should be dropped
 	sender.fired( 300 );
@@ -135,14 +135,14 @@ TYPED_TEST( Invokers, DeferredLoopGainedAfterConnect )
 
 TYPED_TEST( Invokers, DeferredLoopLostAfterConnect )
 {
-	pulsar::EventLoop loop;
-	pulsar::AutoDrainThread drainer( loop );
+	stellyra::EventLoop loop;
+	stellyra::AutoDrainThread drainer( loop );
 
 	InvokerSender< TypeParam > sender;
 	InvokerReceiver receiver;
 	receiver.setEventLoop( &loop );
 
-	sender.fired.connect( receiver, &InvokerReceiver::onFired, pulsar::ConnectionType::Deferred );
+	sender.fired.connect( receiver, &InvokerReceiver::onFired, stellyra::ConnectionType::Deferred );
 
 	sender.fired( 400 );
 	msleep( 50 );
@@ -163,7 +163,7 @@ TYPED_TEST( Invokers, AutoSameLoopInvokesDirect )
 	InvokerReceiver receiver;
 	// both on no loop -> Auto resolves to Direct
 
-	sender.fired.connect( receiver, &InvokerReceiver::onFired, pulsar::ConnectionType::Auto );
+	sender.fired.connect( receiver, &InvokerReceiver::onFired, stellyra::ConnectionType::Auto );
 	sender.fired( 500 );
 	EXPECT_EQ( receiver.callCount, 1 );
 	EXPECT_EQ( receiver.last, 500 );
@@ -171,8 +171,8 @@ TYPED_TEST( Invokers, AutoSameLoopInvokesDirect )
 
 TYPED_TEST( Invokers, AutoDifferentLoopQueues )
 {
-	pulsar::EventLoop loop;
-	pulsar::AutoDrainThread drainer( loop );
+	stellyra::EventLoop loop;
+	stellyra::AutoDrainThread drainer( loop );
 
 	InvokerSender< TypeParam > sender;
 	InvokerReceiver receiver;
@@ -180,7 +180,7 @@ TYPED_TEST( Invokers, AutoDifferentLoopQueues )
 
 	// sender has no loop -> receiverLoop != senderLoop -> queued
 
-	sender.fired.connect( receiver, &InvokerReceiver::onFired, pulsar::ConnectionType::Auto );
+	sender.fired.connect( receiver, &InvokerReceiver::onFired, stellyra::ConnectionType::Auto );
 	sender.fired( 600 );
 
 	msleep( 50 );
@@ -198,7 +198,7 @@ TYPED_TEST( Invokers, MultipleDirectConnections )
 	for ( int i = 0; i < 20; ++i )
 	{
 		auto r = std::make_unique< InvokerReceiver >();
-		sender.fired.connect( *r, &InvokerReceiver::onFired, pulsar::ConnectionType::Direct );
+		sender.fired.connect( *r, &InvokerReceiver::onFired, stellyra::ConnectionType::Direct );
 		receivers.push_back( std::move( r ) );
 	}
 
@@ -214,19 +214,19 @@ TYPED_TEST( Invokers, MultipleDirectConnections )
 // AutoDrainThread::stop() drains anything still in flight, then cleanly
 // detaches - the EventLoop reverts to needing a manual drain() afterward.
 //
-// Doesn't touch a pulsar::Event at all - pure EventLoop/AutoDrainThread
+// Doesn't touch a stellyra::Event at all - pure EventLoop/AutoDrainThread
 // mechanics - so stays a plain TEST() rather than running twice for no
 // benefit under the typed suite.
 // ---------------------------------------------------------------------------
 
 TEST( InvokersUntyped, AutoDrainThreadStopClearsHook )
 {
-	pulsar::EventLoop loop;
+	stellyra::EventLoop loop;
 	std::atomic< int > count{ 0 };
 
 	{
-		pulsar::AutoDrainThread drainer( loop );
-		loop.post( pulsar::EventLoop::Task::create( [ &count ] { ++count; } ) );
+		stellyra::AutoDrainThread drainer( loop );
+		loop.post( stellyra::EventLoop::Task::create( [ &count ] { ++count; } ) );
 
 		auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds( 500 );
 		while ( count.load() < 1 )
@@ -241,7 +241,7 @@ TEST( InvokersUntyped, AutoDrainThreadStopClearsHook )
 
 	// after stop(), post() must not crash even with no drainer attached
 	std::atomic< int > afterStop{ 0 };
-	loop.post( pulsar::EventLoop::Task::create( [ &afterStop ] { ++afterStop; } ) );
+	loop.post( stellyra::EventLoop::Task::create( [ &afterStop ] { ++afterStop; } ) );
 
 	// nothing drains it automatically anymore - must be done manually
 	EXPECT_EQ( afterStop.load(), 0 );
@@ -259,15 +259,15 @@ TEST( InvokersUntyped, AutoDrainThreadStopClearsHook )
 
 TEST( InvokersUntyped, AutoDrainThreadStopDrainsFinalPendingTask )
 {
-	pulsar::EventLoop loop;
+	stellyra::EventLoop loop;
 	std::atomic< bool > ran{ false };
 
-	pulsar::AutoDrainThread drainer( loop );
+	stellyra::AutoDrainThread drainer( loop );
 
 	// post and immediately stop, racing the drain thread's own wakeup
 	// against stop()'s - if stop() doesn't force one final drain, this
 	// task is never guaranteed to run before the thread exits
-	loop.post( pulsar::EventLoop::Task::create( [ &ran ] { ran = true; } ) );
+	loop.post( stellyra::EventLoop::Task::create( [ &ran ] { ran = true; } ) );
 	drainer.stop();
 
 	EXPECT_TRUE( ran.load() );
@@ -275,12 +275,12 @@ TEST( InvokersUntyped, AutoDrainThreadStopDrainsFinalPendingTask )
 
 TEST( InvokersUntyped, AutoDrainThreadDestructorDrainsFinalPendingTask )
 {
-	pulsar::EventLoop loop;
+	stellyra::EventLoop loop;
 	std::atomic< bool > ran{ false };
 
 	{
-		pulsar::AutoDrainThread drainer( loop );
-		loop.post( pulsar::EventLoop::Task::create( [ &ran ] { ran = true; } ) );
+		stellyra::AutoDrainThread drainer( loop );
+		loop.post( stellyra::EventLoop::Task::create( [ &ran ] { ran = true; } ) );
 		// drainer destroyed here - destructor calls stop()
 	}
 

@@ -56,23 +56,23 @@ set_target_properties( bench_qt_3 PROPERTIES AUTOMOC ON )
 set_target_properties( bench_qt_4 PROPERTIES AUTOMOC ON )
 
 target_include_directories( bench_qt_1 PRIVATE
-	"${PULSAR_INCLUDE_DIR}"
-	"${PULSAR_EXTRAS_INCLUDE_DIR}"
+	"${STELLYRA_INCLUDE_DIR}"
+	"${STELLYRA_EXTRAS_INCLUDE_DIR}"
 	"${CMAKE_CURRENT_SOURCE_DIR}/../common"
 )
 target_include_directories( bench_qt_2 PRIVATE
-	"${PULSAR_INCLUDE_DIR}"
-	"${PULSAR_EXTRAS_INCLUDE_DIR}"
+	"${STELLYRA_INCLUDE_DIR}"
+	"${STELLYRA_EXTRAS_INCLUDE_DIR}"
 	"${CMAKE_CURRENT_SOURCE_DIR}/../common"
 )
 target_include_directories( bench_qt_3 PRIVATE
-	"${PULSAR_INCLUDE_DIR}"
-	"${PULSAR_EXTRAS_INCLUDE_DIR}"
+	"${STELLYRA_INCLUDE_DIR}"
+	"${STELLYRA_EXTRAS_INCLUDE_DIR}"
 	"${CMAKE_CURRENT_SOURCE_DIR}/../common"
 )
 target_include_directories( bench_qt_4 PRIVATE
-	"${PULSAR_INCLUDE_DIR}"
-	"${PULSAR_EXTRAS_INCLUDE_DIR}"
+	"${STELLYRA_INCLUDE_DIR}"
+	"${STELLYRA_EXTRAS_INCLUDE_DIR}"
 	"${CMAKE_CURRENT_SOURCE_DIR}/../common"
 )
 

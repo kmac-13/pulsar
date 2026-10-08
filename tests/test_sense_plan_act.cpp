@@ -1,6 +1,6 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
-#include <kmac/pulsar/event_loop.h>
+#include <kmac/stellyra/event_loop.h>
 
 // Validates the "Differential Machine Control via Deferred Event Loops"
 // pattern (see USE_CASE_DIFFERENTIAL_MACHINE_CONTROL.md): Sense reads
@@ -27,7 +27,7 @@
 namespace {
 
 template< typename EventT >
-class Sensor : public pulsar::Trackable
+class Sensor : public stellyra::Trackable
 {
 private:
 	int _last = -1;
@@ -46,7 +46,7 @@ public:
 };
 
 template< typename EventT >
-class Planner : public pulsar::Trackable
+class Planner : public stellyra::Trackable
 {
 public:
 	EventT actuatorCommand{ this };
@@ -59,7 +59,7 @@ public:
 	}
 };
 
-class Actuator : public pulsar::Trackable
+class Actuator : public stellyra::Trackable
 {
 public:
 	int lastCommand = -1;
@@ -75,8 +75,8 @@ public:
 template< typename EventT >
 struct SensePlanActFixture
 {
-	pulsar::EventLoop planLoop;
-	pulsar::EventLoop actLoop;
+	stellyra::EventLoop planLoop;
+	stellyra::EventLoop actLoop;
 
 	Sensor< EventT > sensor;
 	Planner< EventT > planner;
@@ -94,8 +94,8 @@ struct SensePlanActFixture
 		planner.setEventLoop( &planLoop );
 		actuator.setEventLoop( &actLoop );
 
-		sensor.stateChanged.connect( planner, &Planner< EventT >::onStateChanged, pulsar::ConnectionType::Deferred );
-		planner.actuatorCommand.connect( actuator, &Actuator::onCommand, pulsar::ConnectionType::Deferred );
+		sensor.stateChanged.connect( planner, &Planner< EventT >::onStateChanged, stellyra::ConnectionType::Deferred );
+		planner.actuatorCommand.connect( actuator, &Actuator::onCommand, stellyra::ConnectionType::Deferred );
 	}
 
 	// SENSE phase.  Takes no arguments in production - reads hardware
@@ -124,9 +124,9 @@ template< typename EventT >
 class SensePlanAct : public ::testing::Test {};
 
 using EventTypes = ::testing::Types<
-	pulsar::Event< int >,
-	pulsar::SharedEvent< int >,
-	pulsar::SingleThreadedEvent< int > >;
+	stellyra::Event< int >,
+	stellyra::SharedEvent< int >,
+	stellyra::SingleThreadedEvent< int > >;
 TYPED_TEST_SUITE( SensePlanAct, EventTypes );
 
 TYPED_TEST( SensePlanAct, FullCascadeCompletesInOneTick )

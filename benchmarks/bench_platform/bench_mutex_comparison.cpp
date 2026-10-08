@@ -1,14 +1,14 @@
 /**
  * @file bench_mutex_comparison.cpp
  * @brief Raw uncontended lock/unlock cost, std::mutex vs. std::recursive_mutex
- * vs. Pulsar's optional mutex types vs. (on Windows) a raw SRWLOCK.
+ * vs. Stellyra's optional mutex types vs. (on Windows) a raw SRWLOCK.
  *
- * This is a platform/toolchain probe, not a Pulsar-vs-other-library
+ * This is a platform/toolchain probe, not a Stellyra-vs-other-library
  * comparison: no events, no dispatch, no connections - just lock()/unlock()
  * in a tight loop.  It exists to help identify a MutexType for
  * BasicEvent<MutexType, Args...> (or any other lockable-templated code) on
  * a given target, by measuring the primitives directly rather than through
- * Pulsar's dispatch machinery the way bench_pulsar_mutex_variants.cpp does.
+ * Stellyra's dispatch machinery the way bench_stellyra_mutex_variants.cpp does.
  *
  * Deliberately NOT wired into compare.py: there is no cross-library
  * comparison point for a raw mutex, and this is a diagnostic for the person
@@ -19,8 +19,8 @@
  * overhead only) that every real mutex's cost should be read against.
  */
 
-#include <kmac/pulsar/platform.h>
-#include <kmac/pulsar/mutex_types.h>
+#include <kmac/stellyra/platform.h>
+#include <kmac/stellyra/mutex_types.h>
 
 #include <benchmark/benchmark.h>
 
@@ -30,7 +30,7 @@
 #include <windows.h>
 #endif
 
-namespace pulsar = kmac::pulsar;
+namespace stellyra = kmac::stellyra;
 
 #ifdef _WIN32
 // Minimal Lockable wrapper around SRWLOCK, Windows' lightest-weight native
@@ -68,12 +68,12 @@ static void BM_UncontendedLockUnlock( benchmark::State& state )
 		m.unlock();
 	}
 }
-BENCHMARK_TEMPLATE( BM_UncontendedLockUnlock, std::mutex );            // pulsar::platform::Mutex
-BENCHMARK_TEMPLATE( BM_UncontendedLockUnlock, std::recursive_mutex );  // pulsar::platform::RecursiveMutex
-BENCHMARK_TEMPLATE( BM_UncontendedLockUnlock, pulsar::platform::SharedMutex );
-BENCHMARK_TEMPLATE( BM_UncontendedLockUnlock, pulsar::platform::NullMutex );
-BENCHMARK_TEMPLATE( BM_UncontendedLockUnlock, pulsar::platform::FastRecursiveMutex );
-BENCHMARK_TEMPLATE( BM_UncontendedLockUnlock, pulsar::platform::SpinRecursiveMutex );
+BENCHMARK_TEMPLATE( BM_UncontendedLockUnlock, std::mutex );            // stellyra::platform::Mutex
+BENCHMARK_TEMPLATE( BM_UncontendedLockUnlock, std::recursive_mutex );  // stellyra::platform::RecursiveMutex
+BENCHMARK_TEMPLATE( BM_UncontendedLockUnlock, stellyra::platform::SharedMutex );
+BENCHMARK_TEMPLATE( BM_UncontendedLockUnlock, stellyra::platform::NullMutex );
+BENCHMARK_TEMPLATE( BM_UncontendedLockUnlock, stellyra::platform::FastRecursiveMutex );
+BENCHMARK_TEMPLATE( BM_UncontendedLockUnlock, stellyra::platform::SpinRecursiveMutex );
 #ifdef _WIN32
 BENCHMARK_TEMPLATE( BM_UncontendedLockUnlock, SrwMutex );
 #endif

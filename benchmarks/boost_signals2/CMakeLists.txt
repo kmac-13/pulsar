@@ -35,7 +35,7 @@ message( STATUS "bench_boost: disabled (Boost.Signals2 excluded from default bui
 #
 # message( STATUS "bench_boost: found Boost ${Boost_VERSION}" )
 #
-# add_pulsar_benchmark( bench_boost
+# add_stellyra_benchmark( bench_boost
 #     "${CMAKE_CURRENT_SOURCE_DIR}/bench_boost.cpp"
 #     EXTRA_INCLUDES "${Boost_INCLUDE_DIRS}"
 # )

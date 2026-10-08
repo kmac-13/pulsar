@@ -1,8 +1,8 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
-#include <kmac/pulsar/auto_drain_thread.h>
-#include <kmac/pulsar/event_inspector.h>
-#include <kmac/pulsar/event_loop.h>
+#include <kmac/stellyra/auto_drain_thread.h>
+#include <kmac/stellyra/event_inspector.h>
+#include <kmac/stellyra/event_loop.h>
 
 // ---------------------------------------------------------------------------
 // Event Loops
@@ -10,14 +10,14 @@
 
 TEST( EventLoops, DeferredConnections )
 {
-	pulsar::EventLoop loop;
-	pulsar::AutoDrainThread drainer( loop );
+	stellyra::EventLoop loop;
+	stellyra::AutoDrainThread drainer( loop );
 
 	auto button = std::make_shared< TestButton >();
 	auto handler = std::make_shared< TestHandler >();
 	handler->setEventLoop( &loop );
 
-	button->clicked.connect( *handler, &TestHandler::onClicked, pulsar::ConnectionType::Auto );
+	button->clicked.connect( *handler, &TestHandler::onClicked, stellyra::ConnectionType::Auto );
 
 	button->click( 100, 200 );
 
@@ -38,7 +38,7 @@ TEST( EventLoops, ConnectionInfoInspection )
 	button->clicked.connect( *handler, &TestHandler::onClicked );
 	button->clicked.connect( *handler, &TestHandler::onClicked );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	auto info = inspector.getEventInfo();
 
 	EXPECT_EQ( info.connectionCount, 3u );
@@ -53,8 +53,8 @@ TEST( EventLoops, MigrationWithPendingEvents )
 	auto sender = std::make_shared< DataSender >();
 	auto receiver = std::make_shared< DataReceiver >();
 
-	pulsar::EventLoop loop1;
-	pulsar::AutoDrainThread drainer1( loop1 );
+	stellyra::EventLoop loop1;
+	stellyra::AutoDrainThread drainer1( loop1 );
 	receiver->setEventLoop( &loop1 );
 
 	sender->dataReady.connect( *receiver, &DataReceiver::processData );
@@ -65,8 +65,8 @@ TEST( EventLoops, MigrationWithPendingEvents )
 
 	msleep( 50 );
 
-	pulsar::EventLoop loop2;
-	pulsar::AutoDrainThread drainer2( loop2 );
+	stellyra::EventLoop loop2;
+	stellyra::AutoDrainThread drainer2( loop2 );
 	// any of sender's tasks still pending in loop1 migrate to loop2 here
 	receiver->setEventLoop( &loop2 );
 
@@ -87,7 +87,7 @@ TEST( EventLoops, ManualProcessEvents )
 	auto receiver = std::make_shared< DataReceiver >();
 
 	// manual mode - caller drives drain()
-	pulsar::EventLoop loop;
+	stellyra::EventLoop loop;
 	receiver->setEventLoop( &loop );
 
 	sender->dataReady.connect( *receiver, &DataReceiver::processData );
@@ -105,9 +105,9 @@ TEST( EventLoops, StopWithPendingEvents )
 	auto sender = std::make_shared< DataSender >();
 	auto receiver = std::make_shared< DataReceiver >();
 
-	pulsar::EventLoop loop;
+	stellyra::EventLoop loop;
 	{
-		pulsar::AutoDrainThread drainer( loop );
+		stellyra::AutoDrainThread drainer( loop );
 		receiver->setEventLoop( &loop );
 
 		for ( int i = 0; i < 100; ++i )
@@ -129,12 +129,12 @@ TEST( EventLoops, MultipleEventLoops )
 	auto receiver2 = std::make_shared< DataReceiver >();
 	auto receiver3 = std::make_shared< DataReceiver >();
 
-	pulsar::EventLoop loop1;
-	pulsar::EventLoop loop2;
-	pulsar::EventLoop loop3;
-	pulsar::AutoDrainThread drainer1( loop1 );
-	pulsar::AutoDrainThread drainer2( loop2 );
-	pulsar::AutoDrainThread drainer3( loop3 );
+	stellyra::EventLoop loop1;
+	stellyra::EventLoop loop2;
+	stellyra::EventLoop loop3;
+	stellyra::AutoDrainThread drainer1( loop1 );
+	stellyra::AutoDrainThread drainer2( loop2 );
+	stellyra::AutoDrainThread drainer3( loop3 );
 
 	receiver1->setEventLoop( &loop1 );
 	receiver2->setEventLoop( &loop2 );

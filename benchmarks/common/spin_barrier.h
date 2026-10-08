@@ -24,7 +24,7 @@
 // under-report real elapsed work relative to wall time while it's asleep,
 // which can cause the items_per_second and cpu_time measurements to be
 // misleading for the cross-thread scenarios.  Spinning keeps cpu_time
-// tracking wall time here, matching Pulsar's own Barrier.
+// tracking wall time here, matching Stellyra's own Barrier.
 // ============================================================================
 
 class SpinBarrier

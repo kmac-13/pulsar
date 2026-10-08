@@ -1,4 +1,4 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
 // ---------------------------------------------------------------------------
 // Pending-removal-during-emission stress tests.
@@ -24,18 +24,18 @@
 namespace {
 
 template< typename EventT >
-class StressSender : public pulsar::Trackable
+class StressSender : public stellyra::Trackable
 {
 public:
 	EventT sig{ this };
 };
 
-class StressReceiver : public pulsar::Trackable
+class StressReceiver : public stellyra::Trackable
 {
 public:
 	int id;
 	int hits = 0;
-	pulsar::Connection self;
+	stellyra::Connection self;
 	StressReceiver( int i ) : id( i ) {}
 	void onValue( int )
 	{
@@ -43,11 +43,11 @@ public:
 	}
 };
 
-class StressDisconnector : public pulsar::Trackable
+class StressDisconnector : public stellyra::Trackable
 {
 public:
 	int hits = 0;
-	pulsar::Connection* target = nullptr;
+	stellyra::Connection* target = nullptr;
 	void onValue( int )
 	{
 		++hits;
@@ -64,8 +64,8 @@ template< typename EventT >
 class PendingRemovalStress : public ::testing::Test {};
 
 using EventTypes = ::testing::Types<
-	pulsar::Event< int >,
-	pulsar::SingleThreadedEvent< int > >;
+	stellyra::Event< int >,
+	stellyra::SingleThreadedEvent< int > >;
 TYPED_TEST_SUITE( PendingRemovalStress, EventTypes );
 
 TYPED_TEST( PendingRemovalStress, DisconnectLaterConnectionDuringEmission )
@@ -75,11 +75,11 @@ TYPED_TEST( PendingRemovalStress, DisconnectLaterConnectionDuringEmission )
 	auto second = std::make_unique< StressReceiver >( 2 );
 	auto third = std::make_unique< StressReceiver >( 3 );
 
-	pulsar::Connection secondConn = sender->sig.connect(
-		*second, &StressReceiver::onValue, pulsar::ConnectionType::Direct, 5 );
+	stellyra::Connection secondConn = sender->sig.connect(
+		*second, &StressReceiver::onValue, stellyra::ConnectionType::Direct, 5 );
 	first->target = &secondConn;
-	sender->sig.connect( *first, &StressDisconnector::onValue, pulsar::ConnectionType::Direct, 10 );
-	sender->sig.connect( *third, &StressReceiver::onValue, pulsar::ConnectionType::Direct, 0 );
+	sender->sig.connect( *first, &StressDisconnector::onValue, stellyra::ConnectionType::Direct, 10 );
+	sender->sig.connect( *third, &StressReceiver::onValue, stellyra::ConnectionType::Direct, 0 );
 
 	sender->sig( 1 );
 
@@ -100,10 +100,10 @@ TYPED_TEST( PendingRemovalStress, DisconnectEarlierConnectionDuringEmission )
 	auto first = std::make_shared< StressReceiver >( 1 );
 	auto second = std::make_shared< StressDisconnector >();
 
-	pulsar::Connection firstConn = sender->sig.connect(
-		*first, &StressReceiver::onValue, pulsar::ConnectionType::Direct, 10 );
+	stellyra::Connection firstConn = sender->sig.connect(
+		*first, &StressReceiver::onValue, stellyra::ConnectionType::Direct, 10 );
 	second->target = &firstConn;
-	sender->sig.connect( *second, &StressDisconnector::onValue, pulsar::ConnectionType::Direct, 5 );
+	sender->sig.connect( *second, &StressDisconnector::onValue, stellyra::ConnectionType::Direct, 5 );
 
 	sender->sig( 1 );
 	EXPECT_EQ( first->hits, 1 );  // already invoked before second disconnects it
@@ -122,7 +122,7 @@ TYPED_TEST( PendingRemovalStress, DisconnectAllDuringEmissionThenReconnect )
 
 	TypeParam* eventPtr = &sender.sig;
 
-	class AllDisconnector : public pulsar::Trackable
+	class AllDisconnector : public stellyra::Trackable
 	{
 	public:
 		TypeParam* ev = nullptr;
@@ -136,9 +136,9 @@ TYPED_TEST( PendingRemovalStress, DisconnectAllDuringEmissionThenReconnect )
 	AllDisconnector disc;
 	disc.ev = eventPtr;
 
-	sender.sig.connect( disc, &AllDisconnector::onValue, pulsar::ConnectionType::Direct, 10 );
-	sender.sig.connect( a, &StressReceiver::onValue, pulsar::ConnectionType::Direct, 5 );
-	sender.sig.connect( b, &StressReceiver::onValue, pulsar::ConnectionType::Direct, 0 );
+	sender.sig.connect( disc, &AllDisconnector::onValue, stellyra::ConnectionType::Direct, 10 );
+	sender.sig.connect( a, &StressReceiver::onValue, stellyra::ConnectionType::Direct, 5 );
+	sender.sig.connect( b, &StressReceiver::onValue, stellyra::ConnectionType::Direct, 0 );
 
 	sender.sig( 1 );
 	EXPECT_EQ( disc.hits, 1 );
@@ -147,7 +147,7 @@ TYPED_TEST( PendingRemovalStress, DisconnectAllDuringEmissionThenReconnect )
 
 	// list should be compacted to empty; fresh connect must work
 	StressReceiver c { 3 };
-	sender.sig.connect( c, &StressReceiver::onValue, pulsar::ConnectionType::Direct, 0 );
+	sender.sig.connect( c, &StressReceiver::onValue, stellyra::ConnectionType::Direct, 0 );
 	sender.sig( 2 );
 	EXPECT_EQ( c.hits, 1 );
 }
@@ -156,7 +156,7 @@ TYPED_TEST( PendingRemovalStress, ConnectDuringEmissionDoesNotFireUntilNextEmiss
 {
 	auto sender = std::make_shared< StressSender< TypeParam > >();
 
-	class Connector : public pulsar::Trackable
+	class Connector : public stellyra::Trackable
 	{
 	public:
 		TypeParam* ev = nullptr;
@@ -170,7 +170,7 @@ TYPED_TEST( PendingRemovalStress, ConnectDuringEmissionDoesNotFireUntilNextEmiss
 			if ( ! connected )
 			{
 				connected = true;
-				ev->connect( *newReceiver, &StressReceiver::onValue, pulsar::ConnectionType::Direct, 20 );
+				ev->connect( *newReceiver, &StressReceiver::onValue, stellyra::ConnectionType::Direct, 20 );
 			}
 		}
 	};
@@ -182,8 +182,8 @@ TYPED_TEST( PendingRemovalStress, ConnectDuringEmissionDoesNotFireUntilNextEmiss
 	connector->ev = &sender->sig;
 	connector->newReceiver = newR;
 
-	sender->sig.connect( *connector, &Connector::onValue, pulsar::ConnectionType::Direct, 10 );
-	sender->sig.connect( *low, &StressReceiver::onValue, pulsar::ConnectionType::Direct, 0 );
+	sender->sig.connect( *connector, &Connector::onValue, stellyra::ConnectionType::Direct, 10 );
+	sender->sig.connect( *low, &StressReceiver::onValue, stellyra::ConnectionType::Direct, 0 );
 
 	sender->sig( 1 );
 	EXPECT_EQ( connector->hits, 1 );
@@ -202,10 +202,10 @@ TYPED_TEST( PendingRemovalStress, DisconnectFirstElement )
 	auto first = std::make_shared< StressReceiver >( 1 );
 	auto last = std::make_shared< StressDisconnector >();
 
-	pulsar::Connection firstConn = sender->sig.connect(
-		*first, &StressReceiver::onValue, pulsar::ConnectionType::Direct, 100 );
+	stellyra::Connection firstConn = sender->sig.connect(
+		*first, &StressReceiver::onValue, stellyra::ConnectionType::Direct, 100 );
 	last->target = &firstConn;
-	sender->sig.connect( *last, &StressDisconnector::onValue, pulsar::ConnectionType::Direct, 0 );
+	sender->sig.connect( *last, &StressDisconnector::onValue, stellyra::ConnectionType::Direct, 0 );
 
 	sender->sig( 1 );
 	EXPECT_EQ( first->hits, 1 );

@@ -1,4 +1,4 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
 // ---------------------------------------------------------------------------
 // Basic Connections
@@ -12,9 +12,9 @@ template< typename MutexType >
 class BasicConnections : public ::testing::Test {};
 
 using MutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::SharedMutex,
-	pulsar::platform::NullMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::SharedMutex,
+	stellyra::platform::NullMutex >;
 TYPED_TEST_SUITE( BasicConnections, MutexTypes );
 
 TYPED_TEST( BasicConnections, ConnectionWithoutHandle )
@@ -36,7 +36,7 @@ TYPED_TEST( BasicConnections, ConnectionWithoutHandle )
 
 	button->clicked.disconnect( *handler );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 0u );
 
 	handler->reset();
@@ -86,7 +86,7 @@ TYPED_TEST( BasicConnections, MultipleConnections )
 TYPED_TEST( BasicConnections, LambdaConnectionWithoutHandle )
 {
 	auto button = std::make_unique< TestButtonT< TypeParam > >();
-	auto receiver = std::make_unique< pulsar::Trackable >();
+	auto receiver = std::make_unique< stellyra::Trackable >();
 
 	int callCount = 0;
 	int lastX = 0;
@@ -191,7 +191,7 @@ TYPED_TEST( BasicConnections, NTTPDisconnect )
 
 	button->clicked.template disconnect< &TestHandler::onClicked >( *handler );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 0u );
 
 	handler->reset();
@@ -222,14 +222,14 @@ TYPED_TEST( BasicConnections, NTTPDisconnectLeavesOtherReceiverConnected )
 	EXPECT_EQ( handler1->callCount, 0 );
 	EXPECT_EQ( handler2->callCount, 1 );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 1u );
 }
 
 TYPED_TEST( BasicConnections, LambdaAsCallback )
 {
 	auto button = std::make_unique< TestButtonT< TypeParam > >();
-	auto receiver = std::make_unique< pulsar::Trackable >();
+	auto receiver = std::make_unique< stellyra::Trackable >();
 	int result = 0;
 
 	button->clicked.connectLambda( *receiver, [ &result ]( int x, int y ) {

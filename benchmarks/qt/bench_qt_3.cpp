@@ -86,7 +86,7 @@ static void BM_ConcurrentEmission_PerReceiver( benchmark::State& state )
 	// pre-create emitter threads outside the measured loop; synchronise per
 	// iteration with a barrier to avoid thread creation/teardown overhead in
 	// the hot path (same pattern as BM_ThreadAffinityForwarding_SignalForwarding
-	// and both Pulsar counterparts of this scenario)
+	// and both Stellyra counterparts of this scenario)
 	std::atomic< bool > running{ true };
 	SpinBarrier startBarrier( CONCURRENT_THREAD_COUNT + 1 );  // N emitters + main
 	SpinBarrier endBarrier( CONCURRENT_THREAD_COUNT + 1 );
@@ -153,7 +153,7 @@ BENCHMARK( BM_ConcurrentEmission_PerReceiver )
 // sender's thread.  Once there, EVERY receiver is connected with an explicit
 // Qt::QueuedConnection (not Direct) - a real, valid pattern: forward to a
 // known thread first, then still queue each slot rather than assume Direct
-// is safe once "home".  This is the genuinely equivalent test to Pulsar's
+// is safe once "home".  This is the genuinely equivalent test to Stellyra's
 // Deferred-per-receiver mechanism, plus the extra cost of the forwarding hop
 // itself.  N threads -> 1 forwarding queue entry per emission -> N further
 // queued entries (one per receiver) on the SAME senderThread, all drained
@@ -180,13 +180,13 @@ static void BM_ConcurrentEmission_Serialised_SignalForwarding( benchmark::State&
 		auto r = std::make_unique< Receiver >();
 		r->moveToThread( &senderThread );
 
-		// explicit QueuedConnection, not Direct: matches Pulsar's Deferred
+		// explicit QueuedConnection, not Direct: matches Stellyra's Deferred
 		// semantics - always queue, even though sender and receiver now
 		// share the same thread post-forwarding
 		QObject::connect( sender.get(), &Sender::fired2, r.get(), &Receiver::onFired, Qt::QueuedConnection );
 
 		// a second QueuedConnection per receiver for completion counting,
-		// matching Pulsar's "second Deferred connection per receiver"
+		// matching Stellyra's "second Deferred connection per receiver"
 		// convention, so totalCompletions scales with n the same way
 		QObject::connect(
 			sender.get(), &Sender::fired2,
@@ -265,7 +265,7 @@ BENCHMARK( BM_ConcurrentEmission_Serialised_SignalForwarding )
 // EVERY receiver is connected with an explicit Qt::QueuedConnection (not
 // Direct) - see the note above BM_ConcurrentEmission_Serialised_SignalForwarding
 // for why this, not a Direct fan-out, is the genuinely equivalent test to
-// Pulsar's Deferred-per-receiver mechanism.
+// Stellyra's Deferred-per-receiver mechanism.
 // ============================================================================
 
 static void BM_ConcurrentEmission_Serialised_InvokeMethod( benchmark::State& state )
@@ -287,7 +287,7 @@ static void BM_ConcurrentEmission_Serialised_InvokeMethod( benchmark::State& sta
 		auto r = std::make_unique< Receiver >();
 		r->moveToThread( &senderThread );
 
-		// explicit QueuedConnection, not Direct: matches Pulsar's Deferred
+		// explicit QueuedConnection, not Direct: matches Stellyra's Deferred
 		// semantics - always queue, even though sender and receiver now
 		// share the same thread post-invokeMethod
 		QObject::connect( sender.get(), &Sender::fired, r.get(), &Receiver::onFired, Qt::QueuedConnection );
@@ -295,7 +295,7 @@ static void BM_ConcurrentEmission_Serialised_InvokeMethod( benchmark::State& sta
 	}
 
 	// a second QueuedConnection per receiver for completion counting,
-	// matching Pulsar's "second Deferred connection per receiver"
+	// matching Stellyra's "second Deferred connection per receiver"
 	// convention, so totalCompletions scales with n the same way
 	for ( auto& r : receivers )
 	{
@@ -379,12 +379,12 @@ BENCHMARK( BM_ConcurrentEmission_Serialised_InvokeMethod )
 
 // ============================================================================
 // Scenario 7b (QueuedConnection) - the genuine structural equivalent of
-// Pulsar's BM_ReceiverDeferral_Serialised
+// Stellyra's BM_ReceiverDeferral_Serialised
 //
 // SignalForwarding/InvokeMethod above are sender-forwarding tricks (queue
 // ONCE to reach a specific thread, then fan out to every receiver via
 // DirectConnection, which never queues at all) - functionally the same
-// mechanism as Scenario 6, not a receiver-deferred one.  Pulsar's
+// mechanism as Scenario 6, not a receiver-deferred one.  Stellyra's
 // BM_ReceiverDeferral_Serialised does something different: EVERY receiver
 // gets its own independent Deferred connection to a SHARED EventLoop, so
 // one emission produces N separate EventLoop::post() calls, all funnelled
@@ -396,7 +396,7 @@ BENCHMARK( BM_ConcurrentEmission_Serialised_InvokeMethod )
 // receiver's invocation independently based on the RECEIVER's thread
 // affinity (no forwarding trick needed at all, since the sender doesn't
 // need to live anywhere in particular here).  One emission from any emitter
-// thread produces N separate queued items on drainThread, mirroring Pulsar's
+// thread produces N separate queued items on drainThread, mirroring Stellyra's
 // N separate EventLoop::post() calls per emission.
 // ============================================================================
 
@@ -420,13 +420,13 @@ static void BM_ConcurrentEmission_Serialised_QueuedConnection( benchmark::State&
 		auto r = std::make_unique< Receiver >();
 		r->moveToThread( &drainThread );
 
-		// QueuedConnection, not AutoConnection: matches Pulsar's Deferred
+		// QueuedConnection, not AutoConnection: matches Stellyra's Deferred
 		// semantics - always queue, unconditionally, regardless of which
 		// thread happens to be emitting
 		QObject::connect( &sender, &Sender::fired, r.get(), &Receiver::onFired, Qt::QueuedConnection );
 
 		// a second QueuedConnection per receiver for completion counting,
-		// matching Pulsar's "second Deferred connection per receiver"
+		// matching Stellyra's "second Deferred connection per receiver"
 		// convention, so totalCompletions scales with n the same way
 		QObject::connect(
 			&sender, &Sender::fired,
@@ -512,11 +512,11 @@ BENCHMARK( BM_ConcurrentEmission_Serialised_QueuedConnection )
 //
 // RECEIVER-side Qt::QueuedConnection - not AutoConnection, no thread-
 // affinity check, no forwarding chain.  This is the Qt equivalent of
-// Pulsar's BM_ReceiverDeferral_Serialised (same name, same mechanism, same
+// Stellyra's BM_ReceiverDeferral_Serialised (same name, same mechanism, same
 // n=1/n=5 parameterization) - NOT BM_ConcurrentEmission_Serialised_SignalForwarding
 // or BM_ConcurrentEmission_Serialised_InvokeMethod above, which force
 // dispatch onto the SENDER's own thread regardless of caller; that
-// mechanism's Pulsar counterpart is BM_SenderDeferral_ThreadAffinity, not
+// mechanism's Stellyra counterpart is BM_SenderDeferral_ThreadAffinity, not
 // this scenario.
 // ============================================================================
 
@@ -546,7 +546,7 @@ static void BM_ReceiverDeferral_Serialised( benchmark::State& state )
 
 		// completion counter: second QueuedConnection per receiver, matching
 		// BM_ConcurrentEmission_PerReceiver's two-connection-per-receiver
-		// pattern above and Pulsar's BM_ReceiverDeferral_Serialised exactly -
+		// pattern above and Stellyra's BM_ReceiverDeferral_Serialised exactly -
 		// every receiver counts its own completions, so totalCompletions
 		// scales with n, not just with emission count.
 		QObject::connect(

@@ -11,7 +11,7 @@
  * mid-family (inside BM_ThreadAffinityForwarding_SignalForwarding itself),
  * not just at a family boundary, and Qt has eleven distinct thread-creating
  * benchmark functions - far more than most other libraries in this suite
- * (Pulsar being the only library with more) - so this is a 4-way cluster
+ * (Stellyra being the only library with more) - so this is a 4-way cluster
  * split, not a simple ST/TS-style 2-way split:
  *   bench_qt_1.cpp (this file) - no threads created at all
  *   bench_qt_2.cpp - sender-affinity forwarding cluster
@@ -131,7 +131,7 @@ BENCHMARK( BM_Emit_NConnections )
 // thread on EVERY emission.  Since sender and receiver are on the same thread
 // here, it degrades to a direct call, but pays the thread-check cost each
 // time.  Compare with BM_Emit_1Connection (DirectConnection) to isolate that
-// overhead, and with Pulsar's BM_Emit_1Connection_Auto to show that Pulsar
+// overhead, and with Stellyra's BM_Emit_1Connection_Auto to show that Stellyra
 // resolves the same check once at connect time rather than per-emission.
 // ============================================================================
 
@@ -218,7 +218,7 @@ BENCHMARK( BM_ConnectDisconnect );
 // ============================================================================
 // Scenario 3 (TrackedReceiver) - connect / disconnect throughput
 //
-// Counterpart to Pulsar's BM_ConnectDisconnect_TrackedReceiver.  The two
+// Counterpart to Stellyra's BM_ConnectDisconnect_TrackedReceiver.  The two
 // mechanisms aren't equally weighted. Trackable is a narrow, optional role:
 // it need not even be a base class of the receiver - connect() can take a
 // separate Trackable (a member, or an unrelated object entirely) to own the
@@ -294,8 +294,8 @@ BENCHMARK( BM_ScopedReceiverLifetime );
 // ============================================================================
 // Scenario 8a - disconnect-by-target
 //
-// Counterpart to Pulsar's BM_DisconnectByTarget_LinearScan.  Deliberately
-// not named with a complexity claim - Pulsar's name states its disconnect
+// Counterpart to Stellyra's BM_DisconnectByTarget_LinearScan.  Deliberately
+// not named with a complexity claim - Stellyra's name states its disconnect
 // is a linear scan, per event_storage.h; Qt's internal
 // QObjectPrivate::Connection list/removal implementation is not asserted
 // to share that complexity here, so this measures the analogous operation
@@ -324,7 +324,7 @@ static void BM_DisconnectByTarget( benchmark::State& state )
 
 		QObject::disconnect( &sender, &Sender::fired, receivers.back().get(), &Receiver::onFired );
 
-		// matches Pulsar's BM_DisconnectByTarget_LinearScan's timing
+		// matches Stellyra's BM_DisconnectByTarget_LinearScan's timing
 		// boundary: PauseTiming() stops before setup, ResumeTiming()
 		// starts before the one disconnect() call, and is NOT paused again
 		// before this scope ends - so the remaining n-1 receivers' automatic
@@ -338,8 +338,8 @@ BENCHMARK( BM_DisconnectByTarget )
 // ============================================================================
 // Scenario 8b - bulk disconnect via QObject::disconnect(sender, signal, receiver, nullptr)
 //
-// Counterpart to Pulsar's BM_DisconnectTracker_Batch.  Named without
-// "Tracker" deliberately - that word refers to Pulsar's Trackable base
+// Counterpart to Stellyra's BM_DisconnectTracker_Batch.  Named without
+// "Tracker" deliberately - that word refers to Stellyra's Trackable base
 // class, which has no Qt equivalent; Qt achieves the same externally
 // observable operation (tear down every connection between one specific
 // sender-signal and one specific receiver, in a single call, regardless of

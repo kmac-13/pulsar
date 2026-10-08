@@ -1,4 +1,4 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
 #include <atomic>
 #include <thread>
@@ -35,9 +35,9 @@ template< typename MutexType >
 class ConnectionLifecycle : public ::testing::Test {};
 
 using MutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::SharedMutex,
-	pulsar::platform::NullMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::SharedMutex,
+	stellyra::platform::NullMutex >;
 TYPED_TEST_SUITE( ConnectionLifecycle, MutexTypes );
 
 // ---------------------------------------------------------------------------
@@ -48,7 +48,7 @@ TYPED_TEST_SUITE( ConnectionLifecycle, MutexTypes );
 
 TYPED_TEST( ConnectionLifecycle, StaleConnectionAfterSlotReuseIsIgnored )
 {
-	pulsar::BasicEvent< TypeParam, int > ev;
+	stellyra::BasicEvent< TypeParam, int > ev;
 	callCount = 0;
 
 	auto c1 = ev.template connectFree< &freeFunc >();
@@ -82,7 +82,7 @@ TYPED_TEST( ConnectionLifecycle, ReconnectionFollowsSlotReuseOrderNotConnectionO
 	// connection order: a handler connected into a reused slot takes that
 	// slot's dispatch position; explicit ordering is expressed via priority
 	// (see PriorityControlsDispatchOrder), not connection order
-	pulsar::BasicEvent< TypeParam, int > ev;
+	stellyra::BasicEvent< TypeParam, int > ev;
 	std::vector< int > order;
 
 	auto c0 = ev.connectLambda( [ &order ]( int ) { order.push_back( 0 ); } );  // slot 0
@@ -108,7 +108,7 @@ TYPED_TEST( ConnectionLifecycle, ReconnectingMiddleConnectionTakesReusedSlot )
 {
 	// disconnecting the middle of three connections frees its slot; the next
 	// connection reuses that slot and therefore fires in that slot's position
-	pulsar::BasicEvent< TypeParam, int > ev;
+	stellyra::BasicEvent< TypeParam, int > ev;
 	std::vector< int > order;
 
 	auto c1 = ev.connectLambda( [ &order ]( int ) { order.push_back( 1 ); } );  // slot 0
@@ -127,7 +127,7 @@ TYPED_TEST( ConnectionLifecycle, PriorityControlsDispatchOrder )
 {
 	// priority - not connection order - is how a specific dispatch order is
 	// guaranteed, and it holds regardless of which slots get reused
-	pulsar::BasicEvent< TypeParam, int > ev;
+	stellyra::BasicEvent< TypeParam, int > ev;
 	std::vector< int > order;
 
 	auto c0 = ev.connectLambda( [ &order ]( int ) { order.push_back( 0 ); } );
@@ -136,16 +136,16 @@ TYPED_TEST( ConnectionLifecycle, PriorityControlsDispatchOrder )
 	c1.disconnect();
 
 	// reconnect into reused slots, but assign priorities: higher fires first
-	ev.connectLambda( [ &order ]( int ) { order.push_back( 100 ); }, pulsar::ConnectionType::Auto, ev.params().prio( 1 ) );
-	ev.connectLambda( [ &order ]( int ) { order.push_back( 200 ); }, pulsar::ConnectionType::Auto, ev.params().prio( 9 ) );
-	ev.connectLambda( [ &order ]( int ) { order.push_back( 300 ); }, pulsar::ConnectionType::Auto, ev.params().prio( 5 ) );
+	ev.connectLambda( [ &order ]( int ) { order.push_back( 100 ); }, stellyra::ConnectionType::Auto, ev.params().prio( 1 ) );
+	ev.connectLambda( [ &order ]( int ) { order.push_back( 200 ); }, stellyra::ConnectionType::Auto, ev.params().prio( 9 ) );
+	ev.connectLambda( [ &order ]( int ) { order.push_back( 300 ); }, stellyra::ConnectionType::Auto, ev.params().prio( 5 ) );
 
 	ev( 0 );
 	EXPECT_EQ( order, ( std::vector< int >{ 200, 300, 100 } ) );  // 9, 5, 1
 
 	// removing every non-default-priority connection reverts to the plain
 	// slot-order walk without leaving anything behind
-	pulsar::EventInspector inspector( ev );
+	stellyra::EventInspector inspector( ev );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 3u );
 }
 
@@ -157,11 +157,11 @@ TYPED_TEST( ConnectionLifecycle, PriorityControlsDispatchOrder )
 TYPED_TEST( ConnectionLifecycle, EventMoveConstructionPreservesConnections )
 {
 	callCount = 0;
-	pulsar::BasicEvent< TypeParam, int > ev1;
+	stellyra::BasicEvent< TypeParam, int > ev1;
 	auto c = ev1.template connectFree< &freeFunc >();
 	EXPECT_TRUE( c.isConnected() );
 
-	pulsar::BasicEvent< TypeParam, int > ev2 = std::move( ev1 );
+	stellyra::BasicEvent< TypeParam, int > ev2 = std::move( ev1 );
 	EXPECT_TRUE( c.isConnected() );  // still valid after the move
 
 	ev2( 0 );
@@ -177,7 +177,7 @@ TYPED_TEST( ConnectionLifecycle, EventMoveConstructionPreservesConnections )
 
 TYPED_TEST( ConnectionLifecycle, BasicConnectDisconnectSanity )
 {
-	pulsar::BasicEvent< TypeParam, int > ev;
+	stellyra::BasicEvent< TypeParam, int > ev;
 	callCount = 0;
 
 	auto c = ev.template connectFree< &freeFunc >();
@@ -196,7 +196,7 @@ TYPED_TEST( ConnectionLifecycle, BasicConnectDisconnectSanity )
 
 TYPED_TEST( ConnectionLifecycle, TrackableWithManyConnectionsCompaction )
 {
-	pulsar::BasicEvent< TypeParam, int > ev;
+	stellyra::BasicEvent< TypeParam, int > ev;
 
 	{
 		TestHandler r;
@@ -210,7 +210,7 @@ TYPED_TEST( ConnectionLifecycle, TrackableWithManyConnectionsCompaction )
 	}
 
 	// all 10 connections should be gone now - no crash on next trigger
-	pulsar::EventInspector inspector( ev );
+	stellyra::EventInspector inspector( ev );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 0u );
 	EXPECT_NO_THROW( ev( 0 ) );
 }
@@ -225,16 +225,16 @@ template< typename MutexType >
 class ConnectionLifecycleRestricted : public ::testing::Test {};
 
 using RestrictedMutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::NullMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::NullMutex >;
 TYPED_TEST_SUITE( ConnectionLifecycleRestricted, RestrictedMutexTypes );
 
 TYPED_TEST( ConnectionLifecycleRestricted, ReentrantConnectExcludedFromCurrentEmission )
 {
-	pulsar::BasicEvent< TypeParam, int > ev;
+	stellyra::BasicEvent< TypeParam, int > ev;
 	callCount = 0;
 	bool firstCall = true;
-	pulsar::Connection extra;
+	stellyra::Connection extra;
 
 	auto c = ev.connectLambda( [ &ev, &extra, &firstCall ]( int ) {
 		++callCount;
@@ -261,13 +261,13 @@ template< typename MutexType >
 class ConnectionLifecycleThreadSafe : public ::testing::Test {};
 
 using ThreadSafeMutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::SharedMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::SharedMutex >;
 TYPED_TEST_SUITE( ConnectionLifecycleThreadSafe, ThreadSafeMutexTypes );
 
 TYPED_TEST( ConnectionLifecycleThreadSafe, ConcurrentTriggerIsSafe )
 {
-	pulsar::BasicEvent< TypeParam, int > ev;
+	stellyra::BasicEvent< TypeParam, int > ev;
 	std::atomic< int > concurrentCalls{ 0 };
 
 	ev.connectLambda( [ &concurrentCalls ]( int ) { ++concurrentCalls; } );

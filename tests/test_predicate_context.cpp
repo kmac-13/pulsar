@@ -1,6 +1,6 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
-#include <kmac/pulsar/event_loop.h>
+#include <kmac/stellyra/event_loop.h>
 
 // ---------------------------------------------------------------------------
 // PredicateContext tests
@@ -30,13 +30,13 @@
 namespace {
 
 template< typename EventT >
-class Source : public pulsar::Trackable
+class Source : public stellyra::Trackable
 {
 public:
 	EventT valueChanged { this };
 };
 
-class Sink : public pulsar::Trackable
+class Sink : public stellyra::Trackable
 {
 public:
 	int callCount = 0;
@@ -52,9 +52,9 @@ template< typename EventT >
 class PredicateContext : public ::testing::Test {};
 
 using EventTypes = ::testing::Types<
-	pulsar::Event< int >,
-	pulsar::SharedEvent< int >,
-	pulsar::SingleThreadedEvent< int > >;
+	stellyra::Event< int >,
+	stellyra::SharedEvent< int >,
+	stellyra::SingleThreadedEvent< int > >;
 TYPED_TEST_SUITE( PredicateContext, EventTypes );
 
 // ---------------------------------------------------------------------------
@@ -69,7 +69,7 @@ TYPED_TEST( PredicateContext, ReceiverContextPassingPredicate )
 	src.valueChanged.connectLambda(
 		sink,
 		[ &sink ]( int v ) { sink.onValue( v ); },
-		{ []( int v ) { return v > 5; }, pulsar::PredicateContext::Receiver } );
+		{ []( int v ) { return v > 5; }, stellyra::PredicateContext::Receiver } );
 
 	src.valueChanged( 3 );
 	EXPECT_EQ( sink.callCount, 0 );
@@ -114,7 +114,7 @@ TYPED_TEST( PredicateContext, SenderContextPassingPredicate )
 	src.valueChanged.connectLambda(
 		sink,
 		[ &sink ]( int v ) { sink.onValue( v ); },
-		{ []( int v ) { return v > 5; }, pulsar::PredicateContext::Sender } );
+		{ []( int v ) { return v > 5; }, stellyra::PredicateContext::Sender } );
 
 	src.valueChanged( 3 );
 	EXPECT_EQ( sink.callCount, 0 );
@@ -132,7 +132,7 @@ TYPED_TEST( PredicateContext, SenderContextMultipleEmissions )
 	src.valueChanged.connectLambda(
 		sink,
 		[ &sink ]( int v ) { sink.onValue( v ); },
-		{ []( int v ) { return v % 2 == 0; }, pulsar::PredicateContext::Sender } );  // even values only
+		{ []( int v ) { return v % 2 == 0; }, stellyra::PredicateContext::Sender } );  // even values only
 
 	src.valueChanged( 1 );
 	src.valueChanged( 2 );
@@ -146,13 +146,13 @@ TYPED_TEST( PredicateContext, SenderContextMultipleEmissions )
 TYPED_TEST( PredicateContext, SenderContextLambdaHandler )
 {
 	Source< TypeParam > src;
-	pulsar::Trackable receiver;
+	stellyra::Trackable receiver;
 
 	int callCount = 0;
 	src.valueChanged.connectLambda(
 		receiver,
 		[ &callCount ]( int ) { callCount++; },
-		{ []( int v ) { return v > 0; }, pulsar::PredicateContext::Sender } );
+		{ []( int v ) { return v > 0; }, stellyra::PredicateContext::Sender } );
 
 	src.valueChanged( -1 );
 	EXPECT_EQ( callCount, 0 );
@@ -175,13 +175,13 @@ TYPED_TEST( PredicateContext, BothContextsOnSameEvent )
 	src.valueChanged.connectLambda(
 		sink1,
 		[ &sink1 ]( int v ) { sink1.onValue( v ); },
-		{ []( int v ) { return v > 5; }, pulsar::PredicateContext::Receiver } );
+		{ []( int v ) { return v > 5; }, stellyra::PredicateContext::Receiver } );
 
 	// sink2: sender context, threshold > 5
 	src.valueChanged.connectLambda(
 		sink2,
 		[ &sink2 ]( int v ) { sink2.onValue( v ); },
-		{ []( int v ) { return v > 5; }, pulsar::PredicateContext::Sender } );
+		{ []( int v ) { return v > 5; }, stellyra::PredicateContext::Sender } );
 
 	src.valueChanged( 3 );
 	EXPECT_EQ( sink1.callCount, 0 );
@@ -209,7 +209,7 @@ TYPED_TEST( PredicateContext, SenderContextDoesNotAffectOtherConnections )
 	src.valueChanged.connectLambda(
 		sinkCond,
 		[ &sinkCond ]( int v ) { sinkCond.onValue( v ); },
-		{ []( int ) { return false; }, pulsar::PredicateContext::Sender } );
+		{ []( int ) { return false; }, stellyra::PredicateContext::Sender } );
 
 	src.valueChanged( 42 );
 
@@ -229,7 +229,7 @@ TYPED_TEST( PredicateContext, SenderContextDisconnect )
 	auto conn = src.valueChanged.connectLambda(
 		sink,
 		[ &sink ]( int v ) { sink.onValue( v ); },
-		{ []( int ) { return true; }, pulsar::PredicateContext::Sender } );
+		{ []( int ) { return true; }, stellyra::PredicateContext::Sender } );
 
 	src.valueChanged( 1 );
 	EXPECT_EQ( sink.callCount, 1 );
@@ -249,7 +249,7 @@ TYPED_TEST( PredicateContext, SenderContextAutoDisconnectOnReceiverDestruction )
 		src.valueChanged.connectLambda(
 			sink,
 			[ &sink ]( int v ) { sink.onValue( v ); },
-			{ []( int ) { return true; }, pulsar::PredicateContext::Sender } );
+			{ []( int ) { return true; }, stellyra::PredicateContext::Sender } );
 		src.valueChanged( 1 );
 		callCount = sink.callCount;
 	}
@@ -268,7 +268,7 @@ TYPED_TEST( PredicateContext, SenderContextAutoDisconnectOnReceiverDestruction )
 // ---------------------------------------------------------------------------
 TYPED_TEST( PredicateContext, PredicateOnPartialArgHandler )
 {
-	class ZeroArgSink : public pulsar::Trackable
+	class ZeroArgSink : public stellyra::Trackable
 	{
 	public:
 		int callCount = 0;
@@ -278,11 +278,11 @@ TYPED_TEST( PredicateContext, PredicateOnPartialArgHandler )
 	Source< TypeParam > src;
 	ZeroArgSink sink;
 
-	// event fires (int), method takes () - Pulsar's own compile-time
+	// event fires (int), method takes () - Stellyra's own compile-time
 	// argument truncation, not a hand-written adapter
 	src.valueChanged.template connect< &ZeroArgSink::onFire >(
 		sink,
-		{ []( int v ) { return v > 0; }, pulsar::PredicateContext::Sender } );
+		{ []( int v ) { return v > 0; }, stellyra::PredicateContext::Sender } );
 
 	src.valueChanged( -1 );
 	EXPECT_EQ( sink.callCount, 0 );
@@ -345,7 +345,7 @@ TYPED_TEST( PredicateContext, TrackerlessRawFunctorsWithPriority )
 
 TYPED_TEST( PredicateContext, ReceiverContextDeferredEvaluatesAtDrainTime )
 {
-	struct ThresholdSink : public pulsar::Trackable
+	struct ThresholdSink : public stellyra::Trackable
 	{
 		int minValue = 0;
 		std::vector< int > received;
@@ -354,15 +354,15 @@ TYPED_TEST( PredicateContext, ReceiverContextDeferredEvaluatesAtDrainTime )
 		void onValue( int v ) { received.push_back( v ); }
 	};
 
-	struct DeferredSource : public pulsar::Trackable
+	struct DeferredSource : public stellyra::Trackable
 	{
-		pulsar::EventLoop loop;
+		stellyra::EventLoop loop;
 		TypeParam ev{ this };
 		DeferredSource() { setEventLoop( &loop ); }
 	};
 
 	DeferredSource src;
-	pulsar::EventLoop sinkLoop;
+	stellyra::EventLoop sinkLoop;
 	ThresholdSink sink;
 	sink.setEventLoop( &sinkLoop );
 	sink.minValue = 0;

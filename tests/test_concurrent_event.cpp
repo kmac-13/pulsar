@@ -1,4 +1,4 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
 /**
  * @file test_concurrent_event_gtest.cpp
@@ -19,7 +19,7 @@
  * rule documented in basic_concurrent_event_impl.h).
  */
 
-#include "kmac/pulsar/concurrent_event.h"
+#include "kmac/stellyra/concurrent_event.h"
 
 #include <gtest/gtest.h>
 
@@ -33,10 +33,10 @@
 
 TEST( ConcurrentEvent, BasicConnectTriggerDisconnect )
 {
-	pulsar::ConcurrentEvent< int > event;
+	stellyra::ConcurrentEvent< int > event;
 
 	int sum = 0;
-	pulsar::Connection conn = event.connectLambda( [ & ]( int v ) { sum += v; } );
+	stellyra::Connection conn = event.connectLambda( [ & ]( int v ) { sum += v; } );
 
 	event( 3 );
 	event.trigger( 4 );
@@ -52,10 +52,10 @@ TEST( ConcurrentEvent, BasicConnectTriggerDisconnect )
 
 TEST( ConcurrentEvent, DirectConnectionTypeAccepted )
 {
-	pulsar::ConcurrentEvent< int > event;
+	stellyra::ConcurrentEvent< int > event;
 	int calls = 0;
-	pulsar::Connection conn = event.connectLambda(
-		[ & ]( int ) { ++calls; }, pulsar::ConnectionType::Direct );
+	stellyra::Connection conn = event.connectLambda(
+		[ & ]( int ) { ++calls; }, stellyra::ConnectionType::Direct );
 
 	event( 1 );
 	EXPECT_EQ( calls, 1 );
@@ -64,14 +64,14 @@ TEST( ConcurrentEvent, DirectConnectionTypeAccepted )
 
 TEST( ConcurrentEvent, StaleConnectionIgnored )
 {
-	pulsar::ConcurrentEvent< int > event;
+	stellyra::ConcurrentEvent< int > event;
 
 	int calls = 0;
-	pulsar::Connection first = event.connectLambda( [ & ]( int ) { ++calls; } );
+	stellyra::Connection first = event.connectLambda( [ & ]( int ) { ++calls; } );
 	first.disconnect();
 
 	// reconnect - may reuse the same slot index with a bumped generation
-	pulsar::Connection second = event.connectLambda( [ & ]( int ) { ++calls; } );
+	stellyra::Connection second = event.connectLambda( [ & ]( int ) { ++calls; } );
 
 	// disconnecting the stale handle must not touch the new connection,
 	// even if it landed in the same slot index
@@ -84,10 +84,10 @@ TEST( ConcurrentEvent, StaleConnectionIgnored )
 
 TEST( ConcurrentEvent, BlockUnblock )
 {
-	pulsar::ConcurrentEvent< int > event;
+	stellyra::ConcurrentEvent< int > event;
 
 	int calls = 0;
-	pulsar::Connection conn = event.connectLambda( [ & ]( int ) { ++calls; } );
+	stellyra::Connection conn = event.connectLambda( [ & ]( int ) { ++calls; } );
 
 	conn.block();
 	EXPECT_TRUE( conn.isBlocked() );
@@ -102,7 +102,7 @@ TEST( ConcurrentEvent, BlockUnblock )
 
 TEST( ConcurrentEvent, SingleShotBatching )
 {
-	pulsar::ConcurrentEvent< int > event;
+	stellyra::ConcurrentEvent< int > event;
 
 	int fastFires = 0;
 	int onceFires = 0;
@@ -111,7 +111,7 @@ TEST( ConcurrentEvent, SingleShotBatching )
 	for ( int i = 0; i < 50; ++i )
 	{
 		event.connectLambda(
-			[ & ]( int ) { ++onceFires; }, pulsar::ConnectionType::Auto, event.params().once() );
+			[ & ]( int ) { ++onceFires; }, stellyra::ConnectionType::Auto, event.params().once() );
 	}
 
 	event( 0 );
@@ -127,10 +127,10 @@ TEST( ConcurrentEvent, SingleShotBatching )
 
 TEST( ConcurrentEvent, ScopedConnectionDisconnectsOnDestruction )
 {
-	pulsar::ConcurrentEvent< int > event;
+	stellyra::ConcurrentEvent< int > event;
 	int calls = 0;
 	{
-		pulsar::ScopedConnection guard( event.connectLambda( [ & ]( int ) { ++calls; } ) );
+		stellyra::ScopedConnection guard( event.connectLambda( [ & ]( int ) { ++calls; } ) );
 		event( 1 );
 		EXPECT_EQ( calls, 1 );
 	}
@@ -147,9 +147,9 @@ TEST( ConcurrentEvent, ScopedConnectionDisconnectsOnDestruction )
  */
 TEST( ConcurrentEvent, UnrelatedHandlerSurvivesDisconnect )
 {
-	pulsar::ConcurrentEvent< int > event;
+	stellyra::ConcurrentEvent< int > event;
 	std::vector< int > fireCounts( 20, 0 );
-	std::vector< pulsar::Connection > conns;
+	std::vector< stellyra::Connection > conns;
 
 	for ( int i = 0; i < 20; ++i )
 	{
@@ -188,7 +188,7 @@ TEST( ConcurrentEvent, UnrelatedHandlerSurvivesDisconnect )
 
 TEST( ConcurrentEventReentrancy, ConnectDuringTrigger )
 {
-	pulsar::ConcurrentEvent< int > event;
+	stellyra::ConcurrentEvent< int > event;
 
 	int baseFires = 0;
 	int addedFires = 0;
@@ -209,10 +209,10 @@ TEST( ConcurrentEventReentrancy, ConnectDuringTrigger )
 
 TEST( ConcurrentEventReentrancy, SelfDisconnectDuringTrigger )
 {
-	pulsar::ConcurrentEvent< int > event;
+	stellyra::ConcurrentEvent< int > event;
 
 	int fires = 0;
-	pulsar::Connection self;
+	stellyra::Connection self;
 	self = event.connectLambda( [ & ]( int ) {
 		++fires;
 		self.disconnect();
@@ -227,7 +227,7 @@ TEST( ConcurrentEventReentrancy, SelfDisconnectDuringTrigger )
 
 TEST( ConcurrentEventReentrancy, NestedTriggerSeveralLevelsDeep )
 {
-	pulsar::ConcurrentEvent< int > event;
+	stellyra::ConcurrentEvent< int > event;
 
 	constexpr int MAX_DEPTH = 5;
 	int callsAtDepth[ MAX_DEPTH + 1 ] = { 0 };
@@ -268,10 +268,10 @@ TEST( ConcurrentEventConcurrency, ConnectDisconnectDuringTrigger )
 
 	for ( int trial = 0; trial < TRIALS; ++trial )
 	{
-		pulsar::ConcurrentEvent< int > event;
+		stellyra::ConcurrentEvent< int > event;
 		std::atomic< uint64_t > dispatchCount { 0 };
 
-		std::vector< pulsar::Connection > longLived;
+		std::vector< stellyra::Connection > longLived;
 		for ( int i = 0; i < 4; ++i )
 		{
 			longLived.push_back( event.connectLambda( [ & ]( int ) {
@@ -285,7 +285,7 @@ TEST( ConcurrentEventConcurrency, ConnectDisconnectDuringTrigger )
 			writers.emplace_back( [ & ]() {
 				for ( int op = 0; op < OPS_PER_WRITER; ++op )
 				{
-					pulsar::Connection c = event.connectLambda( [ & ]( int ) {
+					stellyra::Connection c = event.connectLambda( [ & ]( int ) {
 						dispatchCount.fetch_add( 1, std::memory_order_relaxed );
 					} );
 					c.disconnect();
@@ -334,11 +334,11 @@ TEST( ConcurrentEventConcurrency, ReclamationRaceUnderRetireHeavyWriter )
 
 	for ( int trial = 0; trial < TRIALS; ++trial )
 	{
-		pulsar::ConcurrentEvent< int > event;
+		stellyra::ConcurrentEvent< int > event;
 		std::atomic< uint64_t > fires { 0 };
 
 		// one long-lived handler every dispatch should see
-		pulsar::Connection longLived = event.connectLambda( [ & ]( int ) {
+		stellyra::Connection longLived = event.connectLambda( [ & ]( int ) {
 			fires.fetch_add( 1, std::memory_order_relaxed );
 		} );
 
@@ -356,7 +356,7 @@ TEST( ConcurrentEventConcurrency, ReclamationRaceUnderRetireHeavyWriter )
 		std::thread writer( [ & ]() {
 			for ( int i = 0; i < WRITER_OPS; ++i )
 			{
-				pulsar::Connection c = event.connectLambda( [ & ]( int ) {
+				stellyra::Connection c = event.connectLambda( [ & ]( int ) {
 					fires.fetch_add( 1, std::memory_order_relaxed );
 				} );
 				c.disconnect();  // guarantees a retire() on almost every iteration
@@ -394,11 +394,11 @@ TEST( ConcurrentEventConcurrency, GrowthUnderConcurrentDispatch )
 
 	for ( int trial = 0; trial < TRIALS; ++trial )
 	{
-		pulsar::ConcurrentEvent< int > event;
+		stellyra::ConcurrentEvent< int > event;
 		std::atomic< uint64_t > fires { 0 };
 
 		std::thread connector( [ & ]() {
-			std::vector< pulsar::Connection > conns;
+			std::vector< stellyra::Connection > conns;
 			for ( int i = 0; i < TOTAL_HANDLERS; ++i )
 			{
 				conns.push_back( event.connectLambda( [ & ]( int ) {
@@ -446,10 +446,10 @@ TEST( ConcurrentEventConcurrency, HighVolumeDispatchAccountsForEveryInvocation )
 	constexpr int THREADS = 8;
 	constexpr int TRIGGERS_PER_THREAD = 200000;
 
-	pulsar::ConcurrentEvent< int > event;
+	stellyra::ConcurrentEvent< int > event;
 	std::atomic< uint64_t > total { 0 };
 
-	std::vector< pulsar::Connection > handlers;
+	std::vector< stellyra::Connection > handlers;
 	for ( int i = 0; i < 8; ++i )
 	{
 		handlers.push_back( event.connectLambda( [ & ]( int v ) {

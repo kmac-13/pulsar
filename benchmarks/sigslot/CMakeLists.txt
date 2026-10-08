@@ -28,19 +28,19 @@ FetchContent_MakeAvailable( sigslot )
 # Link Pal::Sigslot directly (rather than only extracting its include dir) so
 # its INTERFACE dependency on Threads::Threads is also propagated.
 
-add_pulsar_benchmark( bench_sigslot_st
+add_stellyra_benchmark( bench_sigslot_st
 	"${CMAKE_CURRENT_SOURCE_DIR}/bench_sigslot.cpp"
 	# No SIGSLOT_THREAD_SAFE: uses signal_st
 )
 target_link_libraries( bench_sigslot_st PRIVATE Pal::Sigslot )
 
-add_pulsar_benchmark( bench_sigslot_mt_1
+add_stellyra_benchmark( bench_sigslot_mt_1
 	"${CMAKE_CURRENT_SOURCE_DIR}/bench_sigslot.cpp"
 	DEFINES SIGSLOT_THREAD_SAFE=1
 )
 target_link_libraries( bench_sigslot_mt_1 PRIVATE Pal::Sigslot )
 
-add_pulsar_benchmark( bench_sigslot_mt_2
+add_stellyra_benchmark( bench_sigslot_mt_2
 	"${CMAKE_CURRENT_SOURCE_DIR}/bench_sigslot_mt_2.cpp"
 	DEFINES SIGSLOT_THREAD_SAFE=1
 )

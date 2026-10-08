@@ -1,4 +1,4 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
 // ---------------------------------------------------------------------------
 // BlockGuard and whole-event block()/unblock()
@@ -25,7 +25,7 @@
 namespace {
 
 template< typename EventT >
-struct Sender : public pulsar::Trackable
+struct Sender : public stellyra::Trackable
 {
 	EventT event{ this };
 };
@@ -41,9 +41,9 @@ template< typename EventT >
 class BlockGuardAcrossMutexTypes : public ::testing::Test {};
 
 using EventTypes = ::testing::Types<
-	pulsar::Event< int >,
-	pulsar::SharedEvent< int >,
-	pulsar::SingleThreadedEvent< int > >;
+	stellyra::Event< int >,
+	stellyra::SharedEvent< int >,
+	stellyra::SingleThreadedEvent< int > >;
 TYPED_TEST_SUITE( BlockGuardAcrossMutexTypes, EventTypes );
 
 TYPED_TEST( BlockGuardAcrossMutexTypes, BlockUnblock )
@@ -111,7 +111,7 @@ TYPED_TEST( BlockGuardAcrossMutexTypes, BlockGuardNesting )
 
 TYPED_TEST( BlockGuardAcrossMutexTypes, GuardOutlivesDestroyedEvent )
 {
-	pulsar::BlockGuard guard = []() {
+	stellyra::BlockGuard guard = []() {
 		auto sender = std::make_unique< Sender< TypeParam > >();
 		sender->event.connectLambda( *sender, []( int ) {} );
 		return sender->event.blockGuard();
@@ -131,20 +131,20 @@ TEST( BlockGuard, BlockDepthTypeIsConditionalOnMutexType )
 {
 	static_assert(
 		std::is_same_v<
-			pulsar::BasicEventImpl< pulsar::platform::NullMutex, int >::BlockDepthType,
+			stellyra::BasicEventImpl< stellyra::platform::NullMutex, int >::BlockDepthType,
 			unsigned int >,
 		"SingleThreadedEvent (NullMutex) should use a plain unsigned int blockDepth" );
 
 	static_assert(
 		std::is_same_v<
-			pulsar::BasicEventImpl< pulsar::platform::RecursiveMutex, int >::BlockDepthType,
-			pulsar::platform::Atomic< unsigned int > >,
+			stellyra::BasicEventImpl< stellyra::platform::RecursiveMutex, int >::BlockDepthType,
+			stellyra::platform::Atomic< unsigned int > >,
 		"Event (RecursiveMutex) should use an atomic blockDepth" );
 
 	static_assert(
 		std::is_same_v<
-			pulsar::BasicEventImpl< pulsar::platform::SharedMutex, int >::BlockDepthType,
-			pulsar::platform::Atomic< unsigned int > >,
+			stellyra::BasicEventImpl< stellyra::platform::SharedMutex, int >::BlockDepthType,
+			stellyra::platform::Atomic< unsigned int > >,
 		"SharedEvent (SharedMutex) should use an atomic blockDepth" );
 
 	SUCCEED();

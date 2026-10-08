@@ -24,12 +24,12 @@ FetchContent_MakeAvailable( nod )
 
 set( NOD_INCLUDE_DIR "${nod_SOURCE_DIR}/include" )
 
-add_pulsar_benchmark( bench_nod_1
+add_stellyra_benchmark( bench_nod_1
 	"${CMAKE_CURRENT_SOURCE_DIR}/bench_nod_1.cpp"
 	EXTRA_INCLUDES "${NOD_INCLUDE_DIR}"
 )
 
-add_pulsar_benchmark( bench_nod_2
+add_stellyra_benchmark( bench_nod_2
 	"${CMAKE_CURRENT_SOURCE_DIR}/bench_nod_2.cpp"
 	EXTRA_INCLUDES "${NOD_INCLUDE_DIR}"
 )

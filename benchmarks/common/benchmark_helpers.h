@@ -15,18 +15,18 @@
  * ---------
  * 1.   Single-threaded emission, 1 connection
  * 2.   Single-threaded emission, N connections  (see CONNECTION_COUNTS)
- * 2a.  Single-threaded emission, 1 Auto connection (Pulsar, Qt only)
- * 2b.  Single-threaded emission, N Auto connections (Pulsar, Qt only)
+ * 2a.  Single-threaded emission, 1 Auto connection (Stellyra, Qt only)
+ * 2b.  Single-threaded emission, N Auto connections (Stellyra, Qt only)
  * 2c.  Single-threaded emission, 1 connection, syntax comparison
  * 2d.  Single-threaded emission, N connections, syntax comparison
  * 3.   Connect / disconnect throughput (connect N, emit, disconnect N)
  * 4.   Scoped receiver lifetime:
  *          construct receiver -> connect -> emit -> [disconnect if manual] -> destroy
- * 5.   Cross-thread deferred emission (Pulsar TS, Qt, vdk only)
- * 6.   Thread-affinity forwarding (Pulsar TS, Qt, vdk only)
+ * 5.   Cross-thread deferred emission (Stellyra TS, Qt, vdk only)
+ * 6.   Thread-affinity forwarding (Stellyra TS, Qt, vdk only)
  * 7a.  Concurrent emission, per-receiver queue (libraries with TS emission)
- * 7b.  Concurrent emission, serialised dispatch (Pulsar TS, Qt forwarding only)
- * 8a.  Disconnect-by-target, linear scan (Pulsar only)
+ * 7b.  Concurrent emission, serialised dispatch (Stellyra TS, Qt forwarding only)
+ * 8a.  Disconnect-by-target, linear scan (Stellyra only)
  * 8b.  Bulk disconnect via tracked-connection batch
  * 9.   Contention scaling (fixed receiver count, thread count 1 -> 32)
  *
@@ -94,7 +94,7 @@ constexpr EventArg PAYLOAD = 42;
 
 /// Write a value here inside every handler to prevent dead-code elimination.
 /// std::atomic<int> rather than plain volatile int: several benchmarks (the
-/// "_Parallel" / "SharedEvent" concurrent variants across Pulsar, nod,
+/// "_Parallel" / "SharedEvent" concurrent variants across Stellyra, nod,
 /// rocket, and the Qt Direct-connection variant) genuinely allow multiple
 /// threads to invoke handlers concurrently with no serialisation of their
 /// own - an unsynchronised volatile write from those threads is a data

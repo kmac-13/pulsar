@@ -1,8 +1,8 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
-#include <kmac/pulsar/event_loop.h>
-#include <kmac/pulsar/auto_drain_thread.h>
-#include <kmac/pulsar/event_inspector.h>
+#include <kmac/stellyra/auto_drain_thread.h>
+#include <kmac/stellyra/event_inspector.h>
+#include <kmac/stellyra/event_loop.h>
 
 #include <atomic>
 #include <vector>
@@ -23,8 +23,8 @@ template< typename MutexType >
 class ThreadSafety : public ::testing::Test {};
 
 using ThreadSafeMutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::SharedMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::SharedMutex >;
 TYPED_TEST_SUITE( ThreadSafety, ThreadSafeMutexTypes );
 
 TYPED_TEST( ThreadSafety, ConcurrentEmitAndDisconnect )
@@ -119,8 +119,8 @@ TYPED_TEST( ThreadSafety, CrossThreadEmissionStress )
 
 	struct LoopAndDrainer
 	{
-		pulsar::EventLoop loop;
-		pulsar::AutoDrainThread drainer{ loop };
+		stellyra::EventLoop loop;
+		stellyra::AutoDrainThread drainer{ loop };
 	};
 
 	std::vector< std::unique_ptr< LoopAndDrainer > > loops;
@@ -134,7 +134,7 @@ TYPED_TEST( ThreadSafety, CrossThreadEmissionStress )
 		h->setEventLoop( &loops.back()->loop );
 		handlers.push_back( h );
 
-		button->clicked.connect( *h, &TestHandler::onClicked, pulsar::ConnectionType::Auto );
+		button->clicked.connect( *h, &TestHandler::onClicked, stellyra::ConnectionType::Auto );
 	}
 
 	std::vector< std::thread > emitThreads;
@@ -225,7 +225,7 @@ TYPED_TEST( ThreadSafety, RapidConnectDisconnectStress )
 		msleep( 1 );
 	}
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_LE( inspector.getEventInfo().activeConnectionCount, 1u );
 }
 
@@ -433,7 +433,7 @@ TYPED_TEST( ThreadSafety, RapidConcurrentEmitAndChurn )
 	}
 
 	// connection list should be stable with exactly NUM_HANDLERS active connections
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, (size_t)NUM_HANDLERS );
 
 	EXPECT_GT( totalEmissions.load(), 0 );

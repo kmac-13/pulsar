@@ -1,9 +1,9 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
 // ---------------------------------------------------------------------------
 // Deferred Teardown Order
 //
-// Verifies a specific Pulsar correctness property: destroying Receiver
+// Verifies a specific Stellyra correctness property: destroying Receiver
 // objects BEFORE the AutoDrainThread/EventLoop they're connected through
 // (the "backwards" declaration order deliberately kept in
 // BM_ConcurrentEmission_PerReceiver and BM_ReceiverDeferral_Serialised in
@@ -45,12 +45,12 @@
 // pass on SharedEvent's worst case (std::shared_mutex has repeatedly
 // measured far more expensive per-emission than std::recursive_mutex on
 // MinGW/Windows specifically).  Two independent options scale up for full
-// sanitizer validation: PULSAR_STRESS_TRIALS (trial count, for statistical
+// sanitizer validation: STELLYRA_STRESS_TRIALS (trial count, for statistical
 // power across independent setup/teardown timing) and
-// PULSAR_STRESS_EMISSIONS_PER_THREAD (per-trial volume).
+// STELLYRA_STRESS_EMISSIONS_PER_THREAD (per-trial volume).
 // ---------------------------------------------------------------------------
 
-#include <kmac/pulsar/auto_drain_thread.h>
+#include <kmac/stellyra/auto_drain_thread.h>
 
 #include <atomic>
 #include <cstdlib>
@@ -63,7 +63,7 @@ namespace
 
 int stressTrialCount()
 {
-	if ( const char* env = std::getenv( "PULSAR_STRESS_TRIALS" ) )
+	if ( const char* env = std::getenv( "STELLYRA_STRESS_TRIALS" ) )
 	{
 		const int n = std::atoi( env );
 		if ( n > 0 )
@@ -71,12 +71,12 @@ int stressTrialCount()
 			return n;
 		}
 	}
-	return 20;  // fast-CI default; set PULSAR_STRESS_TRIALS to scale up
+	return 20;  // fast-CI default; set STELLYRA_STRESS_TRIALS to scale up
 }
 
 int stressEmissionsPerThread()
 {
-	if ( const char* env = std::getenv( "PULSAR_STRESS_EMISSIONS_PER_THREAD" ) )
+	if ( const char* env = std::getenv( "STELLYRA_STRESS_EMISSIONS_PER_THREAD" ) )
 	{
 		const int n = std::atoi( env );
 		if ( n > 0 )
@@ -96,7 +96,7 @@ int stressEmissionsPerThread()
 constexpr int RECEIVERS_PER_TRIAL = 6;
 constexpr int EMITTER_THREADS = 4;
 
-struct Receiver : pulsar::Trackable
+struct Receiver : stellyra::Trackable
 {
 	// actually touches member state on every invocation, so a
 	// use-after-free would be a real, detectable write to freed memory,
@@ -118,7 +118,7 @@ class DeferredTeardownOrderTest : public ::testing::Test
 
 // see integration note 3 above - replace with the project's existing
 // thread-safe type alias if one already covers Event + SharedEvent
-using DeferredTeardownOrderEventTypes = ::testing::Types< pulsar::Event< int >, pulsar::SharedEvent< int > >;
+using DeferredTeardownOrderEventTypes = ::testing::Types< stellyra::Event< int >, stellyra::SharedEvent< int > >;
 
 TYPED_TEST_SUITE( DeferredTeardownOrderTest, DeferredTeardownOrderEventTypes );
 
@@ -138,8 +138,8 @@ TYPED_TEST( DeferredTeardownOrderTest, SurvivesReceiverDestroyedBeforeDrainer )
 		// FIRST, before drainers' final-drain destructor runs. This is
 		// the exact property under test, matching the ordering
 		// deliberately kept in the benchmark suite
-		std::list< pulsar::EventLoop > loops;
-		std::list< pulsar::AutoDrainThread > drainers;
+		std::list< stellyra::EventLoop > loops;
+		std::list< stellyra::AutoDrainThread > drainers;
 		std::list< Receiver > receivers;
 
 		for ( int i = 0; i < RECEIVERS_PER_TRIAL; ++i )
@@ -148,7 +148,7 @@ TYPED_TEST( DeferredTeardownOrderTest, SurvivesReceiverDestroyedBeforeDrainer )
 			drainers.emplace_back( loops.back() );
 			receivers.emplace_back();
 			receivers.back().setEventLoop( &loops.back() );
-			sender.template connect< &Receiver::onFired >( receivers.back(), 0, pulsar::ConnectionType::Deferred );
+			sender.template connect< &Receiver::onFired >( receivers.back(), 0, stellyra::ConnectionType::Deferred );
 		}
 
 		std::vector< std::thread > emitters;

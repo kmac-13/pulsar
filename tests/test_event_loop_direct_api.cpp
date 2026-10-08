@@ -1,7 +1,7 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
-#include <kmac/pulsar/event_loop.h>
-#include <kmac/pulsar/auto_drain_thread.h>
+#include <kmac/stellyra/auto_drain_thread.h>
+#include <kmac/stellyra/event_loop.h>
 
 #include <atomic>
 #include <chrono>
@@ -23,10 +23,10 @@
 
 TEST( EventLoopDirectApi, IsDrainingFalseBeforeAndAfterDrain )
 {
-	pulsar::EventLoop loop;
+	stellyra::EventLoop loop;
 	EXPECT_FALSE( loop.isDraining() );
 
-	loop.post( pulsar::EventLoop::Task::create( [] {} ) );
+	loop.post( stellyra::EventLoop::Task::create( [] {} ) );
 	loop.drain();
 
 	EXPECT_FALSE( loop.isDraining() );
@@ -34,10 +34,10 @@ TEST( EventLoopDirectApi, IsDrainingFalseBeforeAndAfterDrain )
 
 TEST( EventLoopDirectApi, IsDrainingTrueWhileTaskRuns )
 {
-	pulsar::EventLoop loop;
+	stellyra::EventLoop loop;
 	bool observedDraining = false;
 
-	loop.post( pulsar::EventLoop::Task::create( [ &loop, &observedDraining ] {
+	loop.post( stellyra::EventLoop::Task::create( [ &loop, &observedDraining ] {
 		observedDraining = loop.isDraining();
 	} ) );
 
@@ -52,13 +52,13 @@ TEST( EventLoopDirectApi, IsDrainingTrueForNestedPostedTaskToo )
 	// a task posted from within another task, while drain() is still
 	// iterating _active, should also observe isDraining()==true once it
 	// eventually runs (drain() keeps looping until _pending is empty too)
-	pulsar::EventLoop loop;
+	stellyra::EventLoop loop;
 	bool outerSawDraining = false;
 	bool innerSawDraining = false;
 
-	loop.post( pulsar::EventLoop::Task::create( [ &loop, &outerSawDraining, &innerSawDraining ] {
+	loop.post( stellyra::EventLoop::Task::create( [ &loop, &outerSawDraining, &innerSawDraining ] {
 		outerSawDraining = loop.isDraining();
-		loop.post( pulsar::EventLoop::Task::create( [ &loop, &innerSawDraining ] {
+		loop.post( stellyra::EventLoop::Task::create( [ &loop, &innerSawDraining ] {
 			innerSawDraining = loop.isDraining();
 		} ) );
 	} ) );
@@ -75,17 +75,17 @@ TEST( EventLoopDirectApi, IsDrainingTrueForNestedPostedTaskToo )
 
 TEST( EventLoopDirectApi, IsDrainingOnThreadFalseWhenIdle )
 {
-	pulsar::EventLoop loop;
-	EXPECT_FALSE( loop.isDrainingOnThread( pulsar::platform::currentThreadId() ) );
+	stellyra::EventLoop loop;
+	EXPECT_FALSE( loop.isDrainingOnThread( stellyra::platform::currentThreadId() ) );
 }
 
 TEST( EventLoopDirectApi, IsDrainingOnThreadTrueForTheDrainingThread )
 {
-	pulsar::EventLoop loop;
+	stellyra::EventLoop loop;
 	bool matchedCurrentThread = false;
 
-	loop.post( pulsar::EventLoop::Task::create( [ &loop, &matchedCurrentThread ] {
-		matchedCurrentThread = loop.isDrainingOnThread( pulsar::platform::currentThreadId() );
+	loop.post( stellyra::EventLoop::Task::create( [ &loop, &matchedCurrentThread ] {
+		matchedCurrentThread = loop.isDrainingOnThread( stellyra::platform::currentThreadId() );
 	} ) );
 
 	loop.drain();
@@ -96,13 +96,13 @@ TEST( EventLoopDirectApi, IsDrainingOnThreadFalseForDifferentThreadId )
 {
 	// drain on this (the test's) thread; from inside the running task, a
 	// background thread's id must not match, even while draining is active
-	pulsar::EventLoop loop;
+	stellyra::EventLoop loop;
 	std::atomic< bool > matchedWrongThread{ true };  // start wrong, expect it flipped to false
 	std::atomic< bool > wrongIdReady{ false };
-	pulsar::platform::ThreadId otherThreadId{};
+	stellyra::platform::ThreadId otherThreadId{};
 
 	std::thread other( [ &otherThreadId, &wrongIdReady ] {
-		otherThreadId = pulsar::platform::currentThreadId();
+		otherThreadId = stellyra::platform::currentThreadId();
 		wrongIdReady = true;
 		// keep the thread alive briefly so its id can't be reused before drain() checks it
 		std::this_thread::sleep_for( std::chrono::milliseconds( 50 ) );
@@ -113,7 +113,7 @@ TEST( EventLoopDirectApi, IsDrainingOnThreadFalseForDifferentThreadId )
 		std::this_thread::yield();
 	}
 
-	loop.post( pulsar::EventLoop::Task::create( [ &loop, &otherThreadId, &matchedWrongThread ] {
+	loop.post( stellyra::EventLoop::Task::create( [ &loop, &otherThreadId, &matchedWrongThread ] {
 		matchedWrongThread = loop.isDrainingOnThread( otherThreadId );
 	} ) );
 
@@ -134,43 +134,43 @@ TEST( EventLoopDirectApi, IsDrainingOnThreadFalseForDifferentThreadId )
 
 TEST( EventLoopDirectApi, ShouldDispatchDirectlyFalseWithNoRegistrationAndNotDraining )
 {
-	pulsar::EventLoop loop;
-	EXPECT_FALSE( loop.shouldDispatchDirectlyOnThread( pulsar::platform::currentThreadId() ) );
+	stellyra::EventLoop loop;
+	EXPECT_FALSE( loop.shouldDispatchDirectlyOnThread( stellyra::platform::currentThreadId() ) );
 }
 
 TEST( EventLoopDirectApi, ShouldDispatchDirectlyTrueWhenRegisteredEvenIfNotDraining )
 {
-	pulsar::EventLoop loop;
-	loop.setDrainThread( pulsar::platform::currentThreadId() );
+	stellyra::EventLoop loop;
+	loop.setDrainThread( stellyra::platform::currentThreadId() );
 
 	// no drain() call at all - registration alone is enough
-	EXPECT_TRUE( loop.shouldDispatchDirectlyOnThread( pulsar::platform::currentThreadId() ) );
+	EXPECT_TRUE( loop.shouldDispatchDirectlyOnThread( stellyra::platform::currentThreadId() ) );
 }
 
 TEST( EventLoopDirectApi, ShouldDispatchDirectlyTrueWhileDrainingEvenWithoutRegistration )
 {
-	pulsar::EventLoop loop;
+	stellyra::EventLoop loop;
 	bool trueWhileDraining = false;
 
-	loop.post( pulsar::EventLoop::Task::create( [ &loop, &trueWhileDraining ] {
-		trueWhileDraining = loop.shouldDispatchDirectlyOnThread( pulsar::platform::currentThreadId() );
+	loop.post( stellyra::EventLoop::Task::create( [ &loop, &trueWhileDraining ] {
+		trueWhileDraining = loop.shouldDispatchDirectlyOnThread( stellyra::platform::currentThreadId() );
 	} ) );
 
 	loop.drain();
 	EXPECT_TRUE( trueWhileDraining );
 
 	// neither condition holds once drain() has returned and nothing is registered
-	EXPECT_FALSE( loop.shouldDispatchDirectlyOnThread( pulsar::platform::currentThreadId() ) );
+	EXPECT_FALSE( loop.shouldDispatchDirectlyOnThread( stellyra::platform::currentThreadId() ) );
 }
 
 TEST( EventLoopDirectApi, ShouldDispatchDirectlyFalseForUnregisteredDifferentThread )
 {
-	pulsar::EventLoop loop;
-	loop.setDrainThread( pulsar::platform::currentThreadId() );
+	stellyra::EventLoop loop;
+	loop.setDrainThread( stellyra::platform::currentThreadId() );
 
 	std::atomic< bool > otherThreadDispatchesDirectly{ true };  // start wrong
 	std::thread other( [ &loop, &otherThreadDispatchesDirectly ] {
-		otherThreadDispatchesDirectly = loop.shouldDispatchDirectlyOnThread( pulsar::platform::currentThreadId() );
+		otherThreadDispatchesDirectly = loop.shouldDispatchDirectlyOnThread( stellyra::platform::currentThreadId() );
 	} );
 	other.join();
 
@@ -184,14 +184,14 @@ TEST( EventLoopDirectApi, ShouldDispatchDirectlyFalseForUnregisteredDifferentThr
 
 TEST( EventLoopDirectApi, MigratePendingToMoveOnlyMatchingTag )
 {
-	pulsar::EventLoop src;
-	pulsar::EventLoop dst;
+	stellyra::EventLoop src;
+	stellyra::EventLoop dst;
 
 	std::vector< int > order;
 
-	src.post( pulsar::EventLoop::Task::create( [ &order ] { order.push_back( 1 ); } ), 100 );  // tag 100 - migrates
-	src.post( pulsar::EventLoop::Task::create( [ &order ] { order.push_back( 2 ); } ), 200 );  // tag 200 - stays
-	src.post( pulsar::EventLoop::Task::create( [ &order ] { order.push_back( 3 ); } ), 100 );  // tag 100 - migrates
+	src.post( stellyra::EventLoop::Task::create( [ &order ] { order.push_back( 1 ); } ), 100 );  // tag 100 - migrates
+	src.post( stellyra::EventLoop::Task::create( [ &order ] { order.push_back( 2 ); } ), 200 );  // tag 200 - stays
+	src.post( stellyra::EventLoop::Task::create( [ &order ] { order.push_back( 3 ); } ), 100 );  // tag 100 - migrates
 
 	src.migratePendingTo( &dst, 100 );
 
@@ -209,12 +209,12 @@ TEST( EventLoopDirectApi, MigratePendingToAppendAfterExistingDestTasks )
 {
 	// migrated tasks land after whatever was already queued in dest -
 	// migration does not reorder dest's own pre-existing pending tasks
-	pulsar::EventLoop src;
-	pulsar::EventLoop dst;
+	stellyra::EventLoop src;
+	stellyra::EventLoop dst;
 	std::vector< int > order;
 
-	src.post( pulsar::EventLoop::Task::create( [ &order ] { order.push_back( 1 ); } ), 5 );
-	dst.post( pulsar::EventLoop::Task::create( [ &order ] { order.push_back( 0 ); } ), 0 );
+	src.post( stellyra::EventLoop::Task::create( [ &order ] { order.push_back( 1 ); } ), 5 );
+	dst.post( stellyra::EventLoop::Task::create( [ &order ] { order.push_back( 0 ); } ), 0 );
 
 	src.migratePendingTo( &dst, 5 );
 
@@ -228,15 +228,15 @@ TEST( EventLoopDirectApi, MigratePendingToLeaveActiveTasksUntouched )
 {
 	// entries already swapped into _active (mid-drain) are not eligible for
 	// migration - migratePendingTo() only ever looks at _pending
-	pulsar::EventLoop src;
-	pulsar::EventLoop dst;
+	stellyra::EventLoop src;
+	stellyra::EventLoop dst;
 	std::vector< int > order;
 
-	src.post( pulsar::EventLoop::Task::create( [ &src, &dst, &order ] {
+	src.post( stellyra::EventLoop::Task::create( [ &src, &dst, &order ] {
 		order.push_back( 1 );  // this task is in _active right now
 
 		// post a second task with the same tag while draining - lands in _pending
-		src.post( pulsar::EventLoop::Task::create( [ &order ] { order.push_back( 2 ); } ), 42 );
+		src.post( stellyra::EventLoop::Task::create( [ &order ] { order.push_back( 2 ); } ), 42 );
 
 		// migrating now must not touch the currently-executing _active batch,
 		// only the newly (re-)pending one
@@ -256,10 +256,10 @@ TEST( EventLoopDirectApi, MigratePendingToLeaveActiveTasksUntouched )
 
 TEST( EventLoopDirectApi, MigratePendingToNoOpsForNullDestSelfDestOrZeroTag )
 {
-	pulsar::EventLoop loop;
+	stellyra::EventLoop loop;
 	std::vector< int > order;
 
-	loop.post( pulsar::EventLoop::Task::create( [ &order ] { order.push_back( 1 ); } ), 7 );
+	loop.post( stellyra::EventLoop::Task::create( [ &order ] { order.push_back( 1 ); } ), 7 );
 
 	EXPECT_NO_THROW( loop.migratePendingTo( nullptr, 7 ) );
 	EXPECT_NO_THROW( loop.migratePendingTo( &loop, 7 ) );  // dest == this
@@ -282,12 +282,12 @@ TEST( EventLoopDirectApi, MigratePendingToNoOpsForNullDestSelfDestOrZeroTag )
 
 TEST( EventLoopDirectApi, MigratePendingToWakesAutoDrainThreadOnDestination )
 {
-	pulsar::EventLoop src;
-	pulsar::EventLoop dst;
-	pulsar::AutoDrainThread dstDrainer( dst );  // dst's drain thread is now parked, waiting
+	stellyra::EventLoop src;
+	stellyra::EventLoop dst;
+	stellyra::AutoDrainThread dstDrainer( dst );  // dst's drain thread is now parked, waiting
 
 	std::atomic< bool > ran{ false };
-	src.post( pulsar::EventLoop::Task::create( [ &ran ] { ran = true; } ), 55 );
+	src.post( stellyra::EventLoop::Task::create( [ &ran ] { ran = true; } ), 55 );
 
 	src.migratePendingTo( &dst, 55 );
 
@@ -311,12 +311,12 @@ TEST( EventLoopDirectApi, MigratePendingToWithNothingMatchedLeavesTaskOnSource )
 	// notify gate must not fire (there's nothing in dest to run anyway) -
 	// the observable, reliable half of this is that the unmatched task
 	// simply stays on src and runs there normally
-	pulsar::EventLoop src;
-	pulsar::EventLoop dst;
-	pulsar::AutoDrainThread dstDrainer( dst );
+	stellyra::EventLoop src;
+	stellyra::EventLoop dst;
+	stellyra::AutoDrainThread dstDrainer( dst );
 
 	bool ran = false;
-	src.post( pulsar::EventLoop::Task::create( [ &ran ] { ran = true; } ), 1 );  // tag 1
+	src.post( stellyra::EventLoop::Task::create( [ &ran ] { ran = true; } ), 1 );  // tag 1
 
 	src.migratePendingTo( &dst, 999 );  // no match - tag 1 != 999
 
@@ -327,7 +327,7 @@ TEST( EventLoopDirectApi, MigratePendingToWithNothingMatchedLeavesTaskOnSource )
 // ---------------------------------------------------------------------------
 // migratePendingTo() and drain() genuinely contend for the same
 // _pendingMutex on the source loop from different threads - deterministic
-// proof via PULSAR_TEST_INJECT, rather than a statistical stress test that
+// proof via STELLYRA_TEST_INJECT, rather than a statistical stress test that
 // merely hopes the scheduler interleaves the two calls on some iteration.
 // ---------------------------------------------------------------------------
 
@@ -347,8 +347,8 @@ namespace {
 
 TEST( EventLoopDirectApi, MigratePendingToBlockConcurrentDrainOnSameSourceLoop )
 {
-	pulsar::EventLoop src;
-	pulsar::EventLoop dst;
+	stellyra::EventLoop src;
+	stellyra::EventLoop dst;
 
 	constexpr uint64_t kMigrateTag = 1;
 	constexpr uint64_t kStayTag = 2;
@@ -359,7 +359,7 @@ TEST( EventLoopDirectApi, MigratePendingToBlockConcurrentDrainOnSameSourceLoop )
 	for ( int i = 0; i < 10; ++i )
 	{
 		uint64_t tag = ( i % 2 == 0 ) ? kMigrateTag : kStayTag;
-		src.post( pulsar::EventLoop::Task::create( [ &totalRun ] {
+		src.post( stellyra::EventLoop::Task::create( [ &totalRun ] {
 			totalRun.fetch_add( 1, std::memory_order_relaxed );
 		} ), tag );
 	}
@@ -417,11 +417,11 @@ TEST( EventLoopDirectApi, MigratePendingToBlockConcurrentDrainOnSameSourceLoop )
 
 TEST( EventLoopDirectApi, NoRetainCapacityConstructorDrainsCorrectly )
 {
-	pulsar::EventLoop loop( false );
+	stellyra::EventLoop loop( false );
 
 	std::vector< int > order;
-	loop.post( pulsar::EventLoop::Task::create( [ &order ] { order.push_back( 1 ); } ) );
-	loop.post( pulsar::EventLoop::Task::create( [ &order ] { order.push_back( 2 ); } ) );
+	loop.post( stellyra::EventLoop::Task::create( [ &order ] { order.push_back( 1 ); } ) );
+	loop.post( stellyra::EventLoop::Task::create( [ &order ] { order.push_back( 2 ); } ) );
 
 	loop.drain();
 	EXPECT_EQ( order, ( std::vector< int >{ 1, 2 } ) );
@@ -433,7 +433,7 @@ TEST( EventLoopDirectApi, NoRetainCapacityConstructorDrainsCorrectly )
 	// a second full post/drain cycle after _active was reset to a
 	// default-constructed vector
 	order.clear();
-	loop.post( pulsar::EventLoop::Task::create( [ &order ] { order.push_back( 3 ); } ) );
+	loop.post( stellyra::EventLoop::Task::create( [ &order ] { order.push_back( 3 ); } ) );
 	loop.drain();
 	EXPECT_EQ( order, ( std::vector< int >{ 3 } ) );
 }
@@ -444,12 +444,12 @@ TEST( EventLoopDirectApi, NoRetainCapacityConstructorHandlesNestedPosting )
 	// _pending into _active more than once per drain() call - with
 	// retainCapacity=false, _active is reset (not just cleared) between
 	// those swaps too
-	pulsar::EventLoop loop( false );
+	stellyra::EventLoop loop( false );
 	std::vector< int > order;
 
-	loop.post( pulsar::EventLoop::Task::create( [ &loop, &order ] {
+	loop.post( stellyra::EventLoop::Task::create( [ &loop, &order ] {
 		order.push_back( 1 );
-		loop.post( pulsar::EventLoop::Task::create( [ &order ] { order.push_back( 2 ); } ) );
+		loop.post( stellyra::EventLoop::Task::create( [ &order ] { order.push_back( 2 ); } ) );
 	} ) );
 
 	loop.drain();

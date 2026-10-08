@@ -1,7 +1,7 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
-#include <kmac/pulsar/auto_drain_thread.h>
-#include <kmac/pulsar/event_loop.h>
+#include <kmac/stellyra/auto_drain_thread.h>
+#include <kmac/stellyra/event_loop.h>
 
 // ---------------------------------------------------------------------------
 // Externally-managed EventLoop
@@ -19,11 +19,11 @@
 
 TEST( ExternalEventLoop, HasDrainThreadReflectsAutoDrainThread )
 {
-	pulsar::EventLoop loop;
+	stellyra::EventLoop loop;
 	EXPECT_FALSE( loop.hasDrainThread() );
 
 	{
-		pulsar::AutoDrainThread drainer( loop );
+		stellyra::AutoDrainThread drainer( loop );
 
 		// setDrainThread() is called from within the background thread's
 		// own startup, not synchronously in this constructor - give it a
@@ -38,9 +38,9 @@ TEST( ExternalEventLoop, HasDrainThreadReflectsAutoDrainThread )
 
 TEST( ExternalEventLoop, EventsNotProcessedUntilDrained )
 {
-	pulsar::EventLoop mainLoop;
-	pulsar::EventLoop workerLoop;
-	pulsar::AutoDrainThread workerDrainer( workerLoop );
+	stellyra::EventLoop mainLoop;
+	stellyra::EventLoop workerLoop;
+	stellyra::AutoDrainThread workerDrainer( workerLoop );
 
 	auto sender = std::make_shared< DataSender >();
 	auto receiver = std::make_shared< DataReceiver >();
@@ -51,7 +51,7 @@ TEST( ExternalEventLoop, EventsNotProcessedUntilDrained )
 	// different loops -> Auto resolves Deferred
 	sender->dataReady.connect( *receiver, &DataReceiver::processData );
 
-	workerLoop.post( pulsar::EventLoop::Task::create( [ &sender ]() { sender->sendData( 42 ); } ) );
+	workerLoop.post( stellyra::EventLoop::Task::create( [ &sender ]() { sender->sendData( 42 ); } ) );
 
 	msleep( 30 );
 	workerDrainer.stop();  // join, for a happens-before edge below
@@ -67,7 +67,7 @@ TEST( ExternalEventLoop, EventsNotProcessedUntilDrained )
 
 TEST( ExternalEventLoop, SameExternalLoopIsDirect )
 {
-	pulsar::EventLoop sharedLoop;
+	stellyra::EventLoop sharedLoop;
 
 	auto sender = std::make_shared< DataSender >();
 	auto receiver = std::make_shared< DataReceiver >();
@@ -90,9 +90,9 @@ TEST( ExternalEventLoop, SameExternalLoopIsDirect )
 
 TEST( ExternalEventLoop, MultipleEventsDrainedTogether )
 {
-	pulsar::EventLoop mainLoop;
-	pulsar::EventLoop workerLoop;
-	pulsar::AutoDrainThread workerDrainer( workerLoop );
+	stellyra::EventLoop mainLoop;
+	stellyra::EventLoop workerLoop;
+	stellyra::AutoDrainThread workerDrainer( workerLoop );
 
 	auto sender = std::make_shared< DataSender >();
 	auto receiver = std::make_shared< DataReceiver >();
@@ -104,7 +104,7 @@ TEST( ExternalEventLoop, MultipleEventsDrainedTogether )
 
 	for ( int i = 1; i <= 5; ++i )
 	{
-		workerLoop.post( pulsar::EventLoop::Task::create( [ &sender, i ]() { sender->sendData( i ); } ) );
+		workerLoop.post( stellyra::EventLoop::Task::create( [ &sender, i ]() { sender->sendData( i ); } ) );
 	}
 
 	msleep( 50 );
@@ -119,9 +119,9 @@ TEST( ExternalEventLoop, MultipleEventsDrainedTogether )
 
 TEST( ExternalEventLoop, RepeatedTicks )
 {
-	pulsar::EventLoop mainLoop;
-	pulsar::EventLoop workerLoop;
-	pulsar::AutoDrainThread workerDrainer( workerLoop );
+	stellyra::EventLoop mainLoop;
+	stellyra::EventLoop workerLoop;
+	stellyra::AutoDrainThread workerDrainer( workerLoop );
 
 	auto sender = std::make_shared< DataSender >();
 	auto receiver = std::make_shared< DataReceiver >();
@@ -131,12 +131,12 @@ TEST( ExternalEventLoop, RepeatedTicks )
 
 	sender->dataReady.connect( *receiver, &DataReceiver::processData );
 
-	workerLoop.post( pulsar::EventLoop::Task::create( [ &sender ]() { sender->sendData( 10 ); } ) );
+	workerLoop.post( stellyra::EventLoop::Task::create( [ &sender ]() { sender->sendData( 10 ); } ) );
 	msleep( 20 );
 	mainLoop.drain();
 	EXPECT_EQ( receiver->callCount, 1 );
 
-	workerLoop.post( pulsar::EventLoop::Task::create( [ &sender ]() { sender->sendData( 20 ); } ) );
+	workerLoop.post( stellyra::EventLoop::Task::create( [ &sender ]() { sender->sendData( 20 ); } ) );
 	msleep( 20 );
 	mainLoop.drain();
 	EXPECT_EQ( receiver->callCount, 2 );
@@ -148,9 +148,9 @@ TEST( ExternalEventLoop, RepeatedTicks )
 
 TEST( ExternalEventLoop, MigrationPreservesPendingEvents )
 {
-	pulsar::EventLoop mainLoop;
-	pulsar::EventLoop workerLoop;
-	pulsar::AutoDrainThread workerDrainer( workerLoop );
+	stellyra::EventLoop mainLoop;
+	stellyra::EventLoop workerLoop;
+	stellyra::AutoDrainThread workerDrainer( workerLoop );
 
 	auto sender = std::make_shared< DataSender >();
 	auto receiver = std::make_shared< DataReceiver >();
@@ -160,11 +160,11 @@ TEST( ExternalEventLoop, MigrationPreservesPendingEvents )
 
 	sender->dataReady.connect( *receiver, &DataReceiver::processData );
 
-	workerLoop.post( pulsar::EventLoop::Task::create( [ &sender ]() { sender->sendData( 1 ); } ) );
+	workerLoop.post( stellyra::EventLoop::Task::create( [ &sender ]() { sender->sendData( 1 ); } ) );
 	msleep( 30 );
 
 	// migrate before draining
-	pulsar::EventLoop mainLoop2;
+	stellyra::EventLoop mainLoop2;
 	receiver->setEventLoop( &mainLoop2 );
 
 	mainLoop.drain();   // should be empty - event migrated

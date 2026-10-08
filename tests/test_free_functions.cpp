@@ -1,4 +1,4 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
 // ---------------------------------------------------------------------------
 // Free Functions and Lambdas
@@ -16,9 +16,9 @@ template< typename MutexType >
 class FreeFunctions : public ::testing::Test {};
 
 using MutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::SharedMutex,
-	pulsar::platform::NullMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::SharedMutex,
+	stellyra::platform::NullMutex >;
 TYPED_TEST_SUITE( FreeFunctions, MutexTypes );
 
 TYPED_TEST( FreeFunctions, StaticFunctionConnection )
@@ -55,7 +55,7 @@ TYPED_TEST( FreeFunctions, MixedConnectionTypes )
 	EXPECT_EQ( handler->callCount, 1 );
 	EXPECT_EQ( lambdaCalls, 1 );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 2u );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 2u );
 
@@ -82,7 +82,7 @@ TYPED_TEST( FreeFunctions, DisconnectFreeFunctionByPointer )
 	button->click( 2, 2 );
 	EXPECT_EQ( _staticCallCount, 1 );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 0u );
 }
 
@@ -97,7 +97,7 @@ TYPED_TEST( FreeFunctions, DisconnectNonCapturingLambda )
 	button->clicked.disconnectFree( static_cast< void ( * )( int, int ) >( lambda ) );
 	button->click( 2, 2 );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 0u );
 }
 
@@ -108,7 +108,7 @@ TYPED_TEST( FreeFunctions, DisconnectSpecificFreeFunction )
 	button->clicked.connectFree( staticClickHandler );
 	button->clicked.connectFree( anotherStaticHandler );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 2u );
 
 	button->clicked.disconnectFree( staticClickHandler );
@@ -163,7 +163,7 @@ TYPED_TEST( FreeFunctions, MixedFreeFunctionsAndLambdas )
 	EXPECT_EQ( _staticCallCount, 1 );
 	EXPECT_EQ( lambdaCalls, 2 );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 0u );
 }
 
@@ -197,7 +197,7 @@ TYPED_TEST( FreeFunctions, NTTPDisconnectFreeFunction )
 	button->click( 2, 2 );
 	EXPECT_EQ( _staticCallCount, 1 );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 0u );
 }
 
@@ -212,7 +212,7 @@ TYPED_TEST( FreeFunctions, NTTPDisconnectLeavesOtherFunctionConnected )
 	button->clicked.template connectFree< &staticClickHandler >();
 	button->clicked.connectFree( anotherStaticHandler );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 2u );
 
 	button->clicked.template disconnectFree< &staticClickHandler >();
@@ -252,7 +252,7 @@ TYPED_TEST( FreeFunctions, TrackedRuntimeFreeFunctionAutoDisconnects )
 	button->click( 1, 1 );
 	EXPECT_EQ( _staticCallCount, 1 );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 1u );
 
 	tracker.reset();  // tracker destruction removes the connection
@@ -278,7 +278,7 @@ TYPED_TEST( FreeFunctions, TrackedNTTPFreeFunctionAutoDisconnects )
 	button->click( 2, 2 );
 	EXPECT_EQ( _staticCallCount, 1 );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 0u );
 }
 
@@ -319,7 +319,7 @@ TYPED_TEST( FreeFunctions, TrackedFreeFunctionExplicitDisconnectThenTrackerDeath
 	button->click( 2, 2 );
 	EXPECT_EQ( _staticCallCount, 0 );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 0u );
 }
 
@@ -331,16 +331,16 @@ TYPED_TEST( FreeFunctions, TrackedFreeFunctionParamOrderingsCompile )
 	auto tracker = std::make_shared< TestHandler >();
 	auto& ev = button->clicked;
 
-	ev.connectFree( *tracker, staticClickHandler, pulsar::ConnectionType::Direct );
-	ev.connectFree( *tracker, staticClickHandler, pulsar::ConnectionType::Direct, ev.params().prio( 5 ) );
+	ev.connectFree( *tracker, staticClickHandler, stellyra::ConnectionType::Direct );
+	ev.connectFree( *tracker, staticClickHandler, stellyra::ConnectionType::Direct, ev.params().prio( 5 ) );
 	ev.connectFree( *tracker, staticClickHandler, ev.params().prio( 5 ) );
-	ev.connectFree( *tracker, staticClickHandler, ev.params().prio( 5 ), pulsar::ConnectionType::Direct );
+	ev.connectFree( *tracker, staticClickHandler, ev.params().prio( 5 ), stellyra::ConnectionType::Direct );
 
-	ev.template connectFree< &staticClickHandler >( *tracker, pulsar::ConnectionType::Direct );
+	ev.template connectFree< &staticClickHandler >( *tracker, stellyra::ConnectionType::Direct );
 	ev.template connectFree< &staticClickHandler >( *tracker, ev.params().prio( 3 ) );
-	ev.template connectFree< &staticClickHandler >( *tracker, ev.params().prio( 3 ), pulsar::ConnectionType::Direct );
+	ev.template connectFree< &staticClickHandler >( *tracker, ev.params().prio( 3 ), stellyra::ConnectionType::Direct );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 7u );
 }
 
@@ -352,8 +352,8 @@ template< typename MutexType >
 class FreeFunctionsRestricted : public ::testing::Test {};
 
 using RestrictedMutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::NullMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::NullMutex >;
 TYPED_TEST_SUITE( FreeFunctionsRestricted, RestrictedMutexTypes );
 
 TYPED_TEST( FreeFunctionsRestricted, FreeFunctionsAndLambdas )
@@ -382,7 +382,7 @@ TYPED_TEST( FreeFunctionsRestricted, FreeFunctionsAndLambdas )
 	EXPECT_EQ( lastY, 20 );
 	EXPECT_EQ( lambdaCalls, 3 );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 2u );
 	EXPECT_EQ( inspector.getEventInfo().directConnectionCount, 2u );
 	EXPECT_EQ( inspector.getEventInfo().deferredConnectionCount, 0u );

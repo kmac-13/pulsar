@@ -1,6 +1,6 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
-#include <kmac/pulsar/event_loop.h>
+#include <kmac/stellyra/event_loop.h>
 
 #include <atomic>
 
@@ -21,13 +21,13 @@
 namespace {
 
 template< typename EventT >
-class ReentrantSender : public pulsar::Trackable
+class ReentrantSender : public stellyra::Trackable
 {
 public:
 	EventT fired{ this };
 };
 
-class ReentrantReceiver : public pulsar::Trackable
+class ReentrantReceiver : public stellyra::Trackable
 {
 public:
 	int last = -1;
@@ -45,8 +45,8 @@ template< typename EventT >
 class Reentrancy : public ::testing::Test {};
 
 using EventTypes = ::testing::Types<
-	pulsar::Event< int >,
-	pulsar::SingleThreadedEvent< int > >;
+	stellyra::Event< int >,
+	stellyra::SingleThreadedEvent< int > >;
 TYPED_TEST_SUITE( Reentrancy, EventTypes );
 
 // A Sender-context predicate calls disconnect() on its own connection handle,
@@ -61,16 +61,16 @@ TYPED_TEST( Reentrancy, PredicateDisconnectsSelf )
 	ReentrantSender< TypeParam > sender;
 	ReentrantReceiver receiver;
 
-	auto connHandle = std::make_shared< pulsar::Connection >();
+	auto connHandle = std::make_shared< stellyra::Connection >();
 	*connHandle = sender.fired.connectLambda(
 		receiver,
 		[ &receiver ]( int v ) { receiver.onFired( v ); },
-		pulsar::ConnectionType::Direct,
+		stellyra::ConnectionType::Direct,
 		sender.fired.params().when(
 			[ connHandle ]( int ) -> bool {
 				connHandle->disconnect();
 				return true;
-			}, pulsar::PredicateContext::Sender ) );
+			}, stellyra::PredicateContext::Sender ) );
 
 	EXPECT_NO_THROW( sender.fired( 42 ) );
 
@@ -101,13 +101,13 @@ TYPED_TEST( Reentrancy, PredicateDisconnectsAll )
 	sender.fired.connectLambda(
 		receiverA,
 		[ &receiverA ]( int v ) { receiverA.onFired( v ); },
-		pulsar::ConnectionType::Direct,
+		stellyra::ConnectionType::Direct,
 		{ [ eventPtr ]( int ) -> bool {
 			eventPtr->disconnectAll();
 			return true;
-		}, pulsar::PredicateContext::Sender } );
+		}, stellyra::PredicateContext::Sender } );
 
-	sender.fired.connect( receiverB, &ReentrantReceiver::onFired, pulsar::ConnectionType::Direct );
+	sender.fired.connect( receiverB, &ReentrantReceiver::onFired, stellyra::ConnectionType::Direct );
 
 	EXPECT_NO_THROW( sender.fired( 100 ) );
 
@@ -140,7 +140,7 @@ TYPED_TEST( Reentrancy, PredicateReemitsSameEvent )
 	sender.fired.connectLambda(
 		receiver,
 		[ &receiver ]( int v ) { receiver.onFired( v ); },
-		pulsar::ConnectionType::Direct,
+		stellyra::ConnectionType::Direct,
 		sender.fired.params().when(
 			[ eventPtr, recursed ]( int v ) -> bool {
 				if ( ! *recursed && v == 1 )
@@ -149,7 +149,7 @@ TYPED_TEST( Reentrancy, PredicateReemitsSameEvent )
 					( *eventPtr )( 2 );  // recursive emission while predicate is running
 				}
 				return true;
-			}, pulsar::PredicateContext::Sender ) );
+			}, stellyra::PredicateContext::Sender ) );
 
 	EXPECT_NO_THROW( sender.fired( 1 ) );
 
@@ -168,7 +168,7 @@ TYPED_TEST( Reentrancy, HandlerReemitsSameEvent )
 	ReentrantSender< TypeParam > sender;
 	int counter = 0;
 
-	class RecursiveHandler : public pulsar::Trackable
+	class RecursiveHandler : public stellyra::Trackable
 	{
 	public:
 		TypeParam* ev = nullptr;
@@ -190,7 +190,7 @@ TYPED_TEST( Reentrancy, HandlerReemitsSameEvent )
 	handler.ev = &sender.fired;
 	handler.counter = &counter;
 
-	sender.fired.connect( handler, &RecursiveHandler::onFired, pulsar::ConnectionType::Direct );
+	sender.fired.connect( handler, &RecursiveHandler::onFired, stellyra::ConnectionType::Direct );
 
 	EXPECT_NO_THROW( sender.fired( 3 ) );
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# run_benchmarks.sh - run all Pulsar benchmark executables and aggregate
+# run_benchmarks.sh - run all Stellyra benchmark executables and aggregate
 #                       results into BENCHMARK_RESULTS.md
 #
 # Usage:
@@ -196,10 +196,10 @@ mkdir -p "$RESULTS_DIR"
 # suite's executables vary enormously in total runtime: a full
 # --benchmark_repetitions=10 run of the lightweight ones (nano, sigslot,
 # vdk_st, rocket_st) finishes in well under a minute, while the heaviest
-# ones (pulsar_ts, qt) now have 25-30+ BENCHMARK() registrations across many
+# ones (stellyra_ts, qt) now have 25-30+ BENCHMARK() registrations across many
 # Arg() combinations, several with an explicit MinTime(1.5) floor per
-# repetition, and comfortably exceed 300s in total. pulsar_ts's timeout was
-# raised again (1800s -> 3000s) when bench_pulsar.cpp picked up an _Event
+# repetition, and comfortably exceed 300s in total. stellyra_ts's timeout was
+# raised again (1800s -> 3000s) when bench_stellyra.cpp picked up an _Event
 # counterpart alongside most of its existing ConcurrentEvent-backed
 # concurrent/contention benchmarks (Scenarios 3, 5, 7a, 9), roughly doubling
 # the thread-heavy portion of that binary. A single global timeout is
@@ -209,8 +209,8 @@ mkdir -p "$RESULTS_DIR"
 # ----------------------------------------------------------------------------
 
 BENCHMARKS=(
-	"pulsar/bench_pulsar_st:pulsar_st:500"
-	"pulsar/bench_pulsar_ts:pulsar_ts:4500"
+	"stellyra/bench_stellyra_st:stellyra_st:500"
+	"stellyra/bench_stellyra_ts:stellyra_ts:4500"
 	"qt/bench_qt_1:qt_1:900"
 	"qt/bench_qt_2:qt_2:600"
 	"qt/bench_qt_3:qt_3:1200"

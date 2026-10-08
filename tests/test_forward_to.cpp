@@ -1,6 +1,6 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
-#include <kmac/pulsar/event_loop.h>
+#include <kmac/stellyra/event_loop.h>
 
 // ---------------------------------------------------------------------------
 // forwardTo
@@ -36,27 +36,27 @@
 namespace {
 
 template< typename MutexType >
-class Widget : public pulsar::Trackable
+class Widget : public stellyra::Trackable
 {
 public:
-	pulsar::BasicEvent< MutexType, int, int > moveEv { this };  // (x, y)
-	pulsar::BasicEvent< MutexType, int > xChanged { this };     // (x)
-	pulsar::BasicEvent< MutexType > moved { this };             // ()
+	stellyra::BasicEvent< MutexType, int, int > moveEv { this };  // (x, y)
+	stellyra::BasicEvent< MutexType, int > xChanged { this };     // (x)
+	stellyra::BasicEvent< MutexType > moved { this };             // ()
 };
 
 template< typename MutexType >
-struct LoopedSource : public pulsar::Trackable
+struct LoopedSource : public stellyra::Trackable
 {
-	pulsar::EventLoop loop;
-	pulsar::BasicEvent< MutexType, int > xChanged { this };
+	stellyra::EventLoop loop;
+	stellyra::BasicEvent< MutexType, int > xChanged { this };
 	LoopedSource() { setEventLoop( &loop ); }
 };
 
 template< typename MutexType >
-struct LoopedTarget : public pulsar::Trackable
+struct LoopedTarget : public stellyra::Trackable
 {
-	pulsar::EventLoop loop;
-	pulsar::BasicEvent< MutexType > moved { this };
+	stellyra::EventLoop loop;
+	stellyra::BasicEvent< MutexType > moved { this };
 	LoopedTarget() { setEventLoop( &loop ); }
 };
 
@@ -66,9 +66,9 @@ template< typename MutexType >
 class ForwardTo : public ::testing::Test {};
 
 using MutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::SharedMutex,
-	pulsar::platform::NullMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::SharedMutex,
+	stellyra::platform::NullMutex >;
 TYPED_TEST_SUITE( ForwardTo, MutexTypes );
 
 // ---------------------------------------------------------------------------
@@ -102,7 +102,7 @@ TYPED_TEST( ForwardTo, DropsTrailingArgFromTwoArgSource )
 TYPED_TEST( ForwardTo, KeepsFirstNPrefix )
 {
 	Widget< TypeParam > w;
-	pulsar::BasicEvent< TypeParam, int > firstOnly { &w };
+	stellyra::BasicEvent< TypeParam, int > firstOnly { &w };
 	int lastX = -1;
 	firstOnly.connectLambda( w, [ & ]( int x ) { lastX = x; } );
 
@@ -115,7 +115,7 @@ TYPED_TEST( ForwardTo, KeepsFirstNPrefix )
 TYPED_TEST( ForwardTo, ExactArityForwardsDirectly )
 {
 	Widget< TypeParam > w;
-	pulsar::BasicEvent< TypeParam, int > mirror { &w };
+	stellyra::BasicEvent< TypeParam, int > mirror { &w };
 	int last = -1;
 	mirror.connectLambda( w, [ & ]( int x ) { last = x; } );
 
@@ -151,7 +151,7 @@ TYPED_TEST( ForwardTo, TrackerIsAutoSourcedFromTargetOwner )
 	int calls = 0;
 	w.moved.connectLambda( w, [ & ]() { calls++; } );
 
-	pulsar::Connection c = w.xChanged.forwardTo( w.moved );
+	stellyra::Connection c = w.xChanged.forwardTo( w.moved );
 	EXPECT_TRUE( c.isConnected() );
 }
 
@@ -179,7 +179,7 @@ TYPED_TEST( ForwardTo, UntrackedWhenTargetHasNoOwner )
 	// a target with no owner Trackable still forwards, just without automatic
 	// lifetime binding - same trust model as connectFree() with no tracker
 	Widget< TypeParam > w;
-	pulsar::BasicEvent< TypeParam > orphanTarget;  // no owner
+	stellyra::BasicEvent< TypeParam > orphanTarget;  // no owner
 	int calls = 0;
 	orphanTarget.connectLambda( [ & ]() { calls++; } );
 
@@ -199,7 +199,7 @@ TYPED_TEST( ForwardTo, ReturnedConnectionExplicitlyDisconnects )
 	int calls = 0;
 	w.moved.connectLambda( w, [ & ]() { calls++; } );
 
-	pulsar::Connection c = w.xChanged.forwardTo( w.moved );
+	stellyra::Connection c = w.xChanged.forwardTo( w.moved );
 	w.xChanged( 1 );
 	EXPECT_EQ( calls, 1 );
 

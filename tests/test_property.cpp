@@ -1,4 +1,4 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
 // ---------------------------------------------------------------------------
 // Property tests
@@ -8,17 +8,17 @@
 // Test fixtures
 // ---------------------------------------------------------------------------
 
-class Config : public pulsar::Trackable
+class Config : public stellyra::Trackable
 {
 public:
-	pulsar::Property< int > retries { this, 3 };
-	pulsar::Property< std::string > label { this, std::string( "default" ) };
+	stellyra::Property< int > retries { this, 3 };
+	stellyra::Property< std::string > label { this, std::string( "default" ) };
 };
 
-class Motor : public pulsar::Trackable
+class Motor : public stellyra::Trackable
 {
 public:
-	pulsar::ReadOnlyProperty< Motor, int > rpm { this, 0 };
+	stellyra::ReadOnlyProperty< Motor, int > rpm { this, 0 };
 
 	void setRpm( int v ) { rpm = v; }
 	void setRpmForce( int v ) { rpm.setForce( v ); }
@@ -31,22 +31,22 @@ struct NonComparable
 	// no operator==
 };
 
-class SpecialSensor : public pulsar::Trackable
+class SpecialSensor : public stellyra::Trackable
 {
 public:
-	pulsar::Property< NonComparable > raw { this };
+	stellyra::Property< NonComparable > raw { this };
 };
 
-class Rectangle : public pulsar::Trackable
+class Rectangle : public stellyra::Trackable
 {
 public:
-	pulsar::Property< int > width { this, 0 };
-	pulsar::Property< int > height { this, 0 };
+	stellyra::Property< int > width { this, 0 };
+	stellyra::Property< int > height { this, 0 };
 
 	// ComputedPropertyFn erases the compute callable's type into
 	// Callable<T()>, so any lambda works directly - no need to name a
 	// functor type for the member declaration
-	pulsar::ComputedPropertyFn< Rectangle, int > area {
+	stellyra::ComputedPropertyFn< Rectangle, int > area {
 		this, [ this ]() { return width.get() * height.get(); } };
 
 	Rectangle()
@@ -62,13 +62,13 @@ public:
 	}
 };
 
-class Badge : public pulsar::Trackable
+class Badge : public stellyra::Trackable
 {
 public:
-	pulsar::ConstProperty< std::string > typeName { this, std::string( "Badge" ) };
+	stellyra::ConstProperty< std::string > typeName { this, std::string( "Badge" ) };
 };
 
-class IntObserver : public pulsar::Trackable
+class IntObserver : public stellyra::Trackable
 {
 public:
 	int callCount = 0;
@@ -223,7 +223,7 @@ TEST( Property, ObserverDestroyedAutoDisconnects )
 TEST( Property, NonComparableTypeAlwaysFires )
 {
 	SpecialSensor sensor;
-	pulsar::Trackable obs;
+	stellyra::Trackable obs;
 
 	int callCount = 0;
 	sensor.raw.changed.connectLambda( obs, [ &callCount ]( const NonComparable& ) {
@@ -240,7 +240,7 @@ TEST( Property, NonComparableTypeAlwaysFires )
 TEST( Property, StringProperty )
 {
 	Config cfg;
-	pulsar::Trackable obs;
+	stellyra::Trackable obs;
 
 	std::string received;
 	cfg.label.changed.connectLambda( obs, [ &received ]( const std::string& v ) {
@@ -340,9 +340,9 @@ TEST( ReadOnlyProperty, ConnectionsArePublic )
 TEST( ComputedPropertyFn, InitialValueFromCompute )
 {
 	// simple case: no deps, just verifies construction evaluates fn
-	pulsar::Trackable obj;
+	stellyra::Trackable obj;
 
-	pulsar::ComputedPropertyFn< pulsar::Trackable, int > prop( &obj, []() { return 21 * 2; } );
+	stellyra::ComputedPropertyFn< stellyra::Trackable, int > prop( &obj, []() { return 21 * 2; } );
 	EXPECT_EQ( prop.get(), 42 );
 }
 
@@ -424,7 +424,7 @@ TEST( ConstProperty, ImplicitConversion )
 TEST( ConstProperty, ChangedNeverFires )
 {
 	Badge badge;
-	pulsar::Trackable obs;
+	stellyra::Trackable obs;
 
 	int callCount = 0;
 	badge.typeName.changed.connectLambda( obs, [ &callCount ]( const std::string& ) {
@@ -448,10 +448,10 @@ TEST( ConstProperty, GetReturnsValue )
 TEST( ROPropertyAlias, IsReadOnlyProperty )
 {
 	// verify the alias compiles and behaves identically
-	class Foo : public pulsar::Trackable
+	class Foo : public stellyra::Trackable
 	{
 	public:
-		pulsar::ROProperty< Foo, int > val { this, 7 };
+		stellyra::ROProperty< Foo, int > val { this, 7 };
 		void set( int v ) { val = v; }
 	};
 

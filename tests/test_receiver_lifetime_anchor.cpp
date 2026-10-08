@@ -1,24 +1,24 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
 // ---------------------------------------------------------------------------
 // Anchor / Tracked<T>
 //
 // A receiver doesn't have to derive from Trackable to participate safely in
-// a connection: embedding a plain pulsar::Anchor (an alias for Trackable) as
+// a connection: embedding a plain stellyra::Anchor (an alias for Trackable) as
 // a member gives it something for the connection machinery to track, and
-// pulsar::Tracked<T> bundles that anchor with the receiver reference at the
+// stellyra::Tracked<T> bundles that anchor with the receiver reference at the
 // connect() call site:
 //
 //   class PlainReceiver
 //   {
 //   public:
 //       void onValue( int v ) { ... }
-//       pulsar::Anchor pulsarAnchor;
+//       stellyra::Anchor anchor;
 //   };
 //
 //   PlainReceiver receiver;
 //   sender.valueChanged.connect(
-//       pulsar::Tracked{ receiver, receiver.pulsarAnchor }, &PlainReceiver::onValue );
+//       stellyra::Tracked{ receiver, receiver.anchor }, &PlainReceiver::onValue );
 //
 // When the anchor is destroyed (typically because the receiver itself was
 // destroyed), the connection is severed the same way it would be for a
@@ -39,11 +39,11 @@
 namespace {
 
 template< typename MutexType >
-class Sender : public pulsar::Trackable
+class Sender : public stellyra::Trackable
 {
 public:
-	pulsar::BasicEvent< MutexType, int > valueChanged { this };
-	pulsar::BasicEvent< MutexType, int, int > twoArgs { this };
+	stellyra::BasicEvent< MutexType, int > valueChanged { this };
+	stellyra::BasicEvent< MutexType, int, int > twoArgs { this };
 };
 
 } // namespace
@@ -58,7 +58,7 @@ public:
 	// declared last among data members - see Anchor's doc comment in
 	// trackable.h for why this is a cheap, non-mandatory hardening
 	// measure rather than a strict requirement
-	pulsar::Anchor pulsarAnchor;
+	stellyra::Anchor anchor;
 
 	void onValue( int v )
 	{
@@ -77,9 +77,9 @@ template< typename MutexType >
 class ReceiverLifetimeAnchor : public ::testing::Test {};
 
 using MutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::SharedMutex,
-	pulsar::platform::NullMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::SharedMutex,
+	stellyra::platform::NullMutex >;
 TYPED_TEST_SUITE( ReceiverLifetimeAnchor, MutexTypes );
 
 // ---------------------------------------------------------------------------
@@ -91,8 +91,8 @@ TYPED_TEST( ReceiverLifetimeAnchor, ConnectAndReceive )
 	Sender< TypeParam > sender;
 	PlainReceiver receiver;
 
-	// explicit pulsar::Tracked unnecessary, but included as example
-	sender.valueChanged.connect( pulsar::Tracked { receiver, receiver.pulsarAnchor }, &PlainReceiver::onValue );
+	// explicit stellyra::Tracked unnecessary, but included as example
+	sender.valueChanged.connect( stellyra::Tracked { receiver, receiver.anchor }, &PlainReceiver::onValue );
 	sender.valueChanged( 42 );
 
 	EXPECT_EQ( receiver.callCount, 1 );
@@ -104,7 +104,7 @@ TYPED_TEST( ReceiverLifetimeAnchor, MultipleEmissions )
 	Sender< TypeParam > sender;
 	PlainReceiver receiver;
 
-	sender.valueChanged.connect( { receiver, receiver.pulsarAnchor }, &PlainReceiver::onValue );
+	sender.valueChanged.connect( { receiver, receiver.anchor }, &PlainReceiver::onValue );
 
 	sender.valueChanged( 1 );
 	sender.valueChanged( 2 );
@@ -119,7 +119,7 @@ TYPED_TEST( ReceiverLifetimeAnchor, MultipleArguments )
 	Sender< TypeParam > sender;
 	PlainReceiver receiver;
 
-	sender.twoArgs.connect( { receiver, receiver.pulsarAnchor }, &PlainReceiver::onTwo );
+	sender.twoArgs.connect( { receiver, receiver.anchor }, &PlainReceiver::onTwo );
 	sender.twoArgs( 10, 20 );
 
 	EXPECT_EQ( receiver.callCount, 1 );
@@ -132,8 +132,8 @@ TYPED_TEST( ReceiverLifetimeAnchor, MultipleSenders )
 	Sender< TypeParam > sender2;
 	PlainReceiver receiver;
 
-	sender1.valueChanged.connect( { receiver, receiver.pulsarAnchor }, &PlainReceiver::onValue );
-	sender2.valueChanged.connect( { receiver, receiver.pulsarAnchor }, &PlainReceiver::onValue );
+	sender1.valueChanged.connect( { receiver, receiver.anchor }, &PlainReceiver::onValue );
+	sender2.valueChanged.connect( { receiver, receiver.anchor }, &PlainReceiver::onValue );
 
 	sender1.valueChanged( 1 );
 	sender2.valueChanged( 2 );
@@ -152,7 +152,7 @@ TYPED_TEST( ReceiverLifetimeAnchor, ConnectionSeveredOnReceiverDestruction )
 
 	{
 		PlainReceiver receiver;
-		sender.valueChanged.connect( { receiver, receiver.pulsarAnchor }, &PlainReceiver::onValue );
+		sender.valueChanged.connect( { receiver, receiver.anchor }, &PlainReceiver::onValue );
 		sender.valueChanged( 1 );
 		callCount = receiver.callCount;
 	}
@@ -171,7 +171,7 @@ TYPED_TEST( ReceiverLifetimeAnchor, ManualDisconnect )
 	Sender< TypeParam > sender;
 	PlainReceiver receiver;
 
-	auto conn = sender.valueChanged.connect( { receiver, receiver.pulsarAnchor }, &PlainReceiver::onValue );
+	auto conn = sender.valueChanged.connect( { receiver, receiver.anchor }, &PlainReceiver::onValue );
 	sender.valueChanged( 1 );
 	EXPECT_EQ( receiver.callCount, 1 );
 
@@ -185,7 +185,7 @@ TYPED_TEST( ReceiverLifetimeAnchor, ConnectionHandleIsConnected )
 	Sender< TypeParam > sender;
 	PlainReceiver receiver;
 
-	auto conn = sender.valueChanged.connect( { receiver, receiver.pulsarAnchor }, &PlainReceiver::onValue );
+	auto conn = sender.valueChanged.connect( { receiver, receiver.anchor }, &PlainReceiver::onValue );
 	EXPECT_TRUE( conn.isConnected() );
 
 	conn.disconnect();
@@ -198,7 +198,7 @@ TYPED_TEST( ReceiverLifetimeAnchor, SenderDestroyedDoesNotCrash )
 
 	{
 		Sender< TypeParam > sender;
-		sender.valueChanged.connect( { receiver, receiver.pulsarAnchor }, &PlainReceiver::onValue );
+		sender.valueChanged.connect( { receiver, receiver.anchor }, &PlainReceiver::onValue );
 		sender.valueChanged( 1 );
 	}
 	// sender destroyed - receiver still alive, just no more events
@@ -216,7 +216,7 @@ TYPED_TEST( ReceiverLifetimeAnchor, AnchorPatternWithDifferentMemberName )
 	{
 	public:
 		int callCount = 0;
-		pulsar::Anchor lifetimeAnchor;
+		stellyra::Anchor lifetimeAnchor;
 		void onValue( int ) { callCount++; }
 	};
 
@@ -241,5 +241,5 @@ TEST( ReceiverLifetimeAnchorUntyped, AnchorHasNativeEventLoopAccessors )
 
 	// eventLoop()/setEventLoop() are called directly on the Anchor, since
 	// it is a Trackable
-	EXPECT_EQ( receiver.pulsarAnchor.eventLoop(), nullptr );
+	EXPECT_EQ( receiver.anchor.eventLoop(), nullptr );
 }

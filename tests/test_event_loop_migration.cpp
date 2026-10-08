@@ -1,6 +1,6 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
-#include <kmac/pulsar/event_loop.h>
+#include <kmac/stellyra/event_loop.h>
 
 #include <chrono>
 #include <vector>
@@ -26,14 +26,14 @@
 namespace {
 
 template< typename EventT >
-struct Sender : pulsar::Trackable
+struct Sender : stellyra::Trackable
 {
-	pulsar::EventLoop loop;
+	stellyra::EventLoop loop;
 	EventT ev{ this };
 	Sender() { setEventLoop( &loop ); }
 };
 
-struct Recv : pulsar::Trackable
+struct Recv : stellyra::Trackable
 {
 	std::vector< int > received;
 	void onEvent( int v ) { received.push_back( v ); }
@@ -52,15 +52,15 @@ template< typename EventT >
 class EventLoopMigration : public ::testing::Test {};
 
 using EventTypes = ::testing::Types<
-	pulsar::Event< int >,
-	pulsar::SharedEvent< int >,
-	pulsar::SingleThreadedEvent< int > >;
+	stellyra::Event< int >,
+	stellyra::SharedEvent< int >,
+	stellyra::SingleThreadedEvent< int > >;
 TYPED_TEST_SUITE( EventLoopMigration, EventTypes );
 
 TYPED_TEST( EventLoopMigration, PendingTaskMovesToNewLoopBeforeDrain )
 {
 	Sender< TypeParam > s;
-	pulsar::EventLoop oldLoop, newLoop;
+	stellyra::EventLoop oldLoop, newLoop;
 
 	Recv r;
 	r.setEventLoop( &oldLoop );
@@ -86,7 +86,7 @@ TYPED_TEST( EventLoopMigration, ActiveDrainBatchIsNotMigrated )
 	// loop even if migration happens mid-drain, from within another task in
 	// that same batch - migration only affects the *pending* queue
 	Sender< TypeParam > s;
-	pulsar::EventLoop oldLoop, newLoop;
+	stellyra::EventLoop oldLoop, newLoop;
 
 	Recv r;
 	r.setEventLoop( &oldLoop );
@@ -96,7 +96,7 @@ TYPED_TEST( EventLoopMigration, ActiveDrainBatchIsNotMigrated )
 	s.loop.drain();  // now the connection resolves and posts to oldLoop, not yet drained
 
 	bool migrated = false;
-	oldLoop.post( pulsar::EventLoop::Task::create( [ & ]() {
+	oldLoop.post( stellyra::EventLoop::Task::create( [ & ]() {
 		r.setEventLoop( &newLoop );  // migrate mid-drain
 		migrated = true;
 	} ) );
@@ -117,19 +117,19 @@ TYPED_TEST( EventLoopMigration, PreservesInterleavedPostingOrderAcrossEvents )
 	// a receiver connected to two different events on the same sender:
 	// tasks posted in interleaved order must still drain in that same
 	// order after migration, not grouped by event
-	struct TwoEventSender : pulsar::Trackable
+	struct TwoEventSender : stellyra::Trackable
 	{
-		pulsar::EventLoop loop;
+		stellyra::EventLoop loop;
 		TypeParam e1{ this };
 		TypeParam e2{ this };
 		TwoEventSender() { setEventLoop( &loop ); }
 	};
 
 	TwoEventSender s;
-	pulsar::EventLoop oldLoop, newLoop;
+	stellyra::EventLoop oldLoop, newLoop;
 
 	std::vector< int > fired;
-	pulsar::Trackable receiver;
+	stellyra::Trackable receiver;
 	receiver.setEventLoop( &oldLoop );
 
 	s.e1.connectLambda( receiver, [ &fired ]( int v ) { fired.push_back( v ); } );
@@ -154,9 +154,9 @@ TYPED_TEST( EventLoopMigration, OnlyMigratingReceiversTasksMove )
 	// two receivers share one loop; only one of them migrates, its
 	// counterpart's pending task must stay put
 	Sender< TypeParam > s;
-	pulsar::EventLoop sharedLoop, newLoop;
+	stellyra::EventLoop sharedLoop, newLoop;
 
-	struct NamedRecv : pulsar::Trackable
+	struct NamedRecv : stellyra::Trackable
 	{
 		std::vector< std::string >* log;
 		std::string name;
@@ -190,7 +190,7 @@ TYPED_TEST( EventLoopMigration, OnlyMigratingReceiversTasksMove )
 TYPED_TEST( EventLoopMigration, DeferredBecomesNoneWhenReceiverLoopCleared )
 {
 	Sender< TypeParam > s;
-	pulsar::EventLoop rcvLoop;
+	stellyra::EventLoop rcvLoop;
 	Recv r;
 	r.setEventLoop( &rcvLoop );
 	s.ev.template connect< &Recv::onEvent >( r );
@@ -231,15 +231,15 @@ TEST( EventLoopMigrationUntyped, NestedDrainCallIsANoOp )
 	// drain() on its own loop) must be a safe no-op, not double-process
 	// the queue or deadlock - guarded by the same CAS that also protects
 	// concurrent cross-thread drain() calls
-	pulsar::EventLoop loop;
+	stellyra::EventLoop loop;
 	int count = 0;
 
-	loop.post( pulsar::EventLoop::Task::create( [ & ]() {
+	loop.post( stellyra::EventLoop::Task::create( [ & ]() {
 		++count;
 		loop.drain();  // reentrant - must do nothing
 		++count;
 	} ) );
-	loop.post( pulsar::EventLoop::Task::create( [ & ]() { ++count; } ) );
+	loop.post( stellyra::EventLoop::Task::create( [ & ]() { ++count; } ) );
 
 	loop.drain();
 	EXPECT_EQ( count, 3 );
@@ -247,12 +247,12 @@ TEST( EventLoopMigrationUntyped, NestedDrainCallIsANoOp )
 
 TEST( EventLoopMigrationUntyped, DrainThreadRegistrationAccessors )
 {
-	pulsar::EventLoop loop;
+	stellyra::EventLoop loop;
 	EXPECT_FALSE( loop.hasDrainThread() );
 
-	loop.setDrainThread( pulsar::platform::currentThreadId() );
+	loop.setDrainThread( stellyra::platform::currentThreadId() );
 	EXPECT_TRUE( loop.hasDrainThread() );
-	EXPECT_EQ( loop.drainThread(), pulsar::platform::currentThreadId() );
+	EXPECT_EQ( loop.drainThread(), stellyra::platform::currentThreadId() );
 
 	loop.clearDrainThread();
 	EXPECT_FALSE( loop.hasDrainThread() );
@@ -265,9 +265,9 @@ TEST( EventLoopMigrationUntyped, DrainThreadRegistrationAccessors )
 TYPED_TEST( EventLoopMigration, PriorityAppliesUnderDeferredDispatch )
 {
 	Sender< TypeParam > s;
-	pulsar::EventLoop receiverLoop;
+	stellyra::EventLoop receiverLoop;
 
-	struct OrderRecv : pulsar::Trackable
+	struct OrderRecv : stellyra::Trackable
 	{
 		int id;
 		std::vector< int >* order;
@@ -299,9 +299,9 @@ TYPED_TEST( EventLoopMigration, PriorityAppliesUnderDeferredDispatch )
 
 TYPED_TEST( EventLoopMigration, ReResolvesToDirectWhenSenderLoopChangesToMatch )
 {
-	pulsar::Anchor senderAnchor;
+	stellyra::Anchor senderAnchor;
 	TypeParam ev{ &senderAnchor };
-	pulsar::EventLoop sharedLoop, senderLoop;
+	stellyra::EventLoop sharedLoop, senderLoop;
 
 	Recv r;
 	r.setEventLoop( &sharedLoop );
@@ -339,9 +339,9 @@ TYPED_TEST( EventLoopMigration, ReResolvesToDirectWhenSenderLoopChangesToMatch )
 TYPED_TEST( EventLoopMigration, SharedArgumentCaptureAcrossDeferredHandlers )
 {
 	Sender< TypeParam > s;
-	pulsar::EventLoop receiverLoop;
+	stellyra::EventLoop receiverLoop;
 
-	struct MultiRecv : pulsar::Trackable
+	struct MultiRecv : stellyra::Trackable
 	{
 		std::vector< int >* vals;
 		void onA( int v ) { vals->push_back( v * 10 ); }

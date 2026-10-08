@@ -1,5 +1,5 @@
 cmake_minimum_required( VERSION 3.16 )
-project( PulsarBenchmarks )
+project( StellyraBenchmarks )
 
 set( CMAKE_CXX_STANDARD 17 )
 set( CMAKE_CXX_STANDARD_REQUIRED ON )
@@ -10,23 +10,23 @@ if( WIN32 )
 endif()
 
 # ============================================================================
-# Pulsar include paths
+# Stellyra include paths
 #
 # Benchmarks are run from the benchmarks/ subdirectory of the repo, so
-# the Pulsar headers are two levels up.  Adjust PULSAR_ROOT if you build
+# the Stellyra headers are two levels up.  Adjust STELLYRA_ROOT if you build
 # from a different location.
 # ============================================================================
 
-set( PULSAR_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.."
-	CACHE PATH "Root of the Pulsar repository" )
+set( STELLYRA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.."
+	CACHE PATH "Root of the Stellyra repository" )
 
-set( PULSAR_INCLUDE_DIR   "${PULSAR_ROOT}/libs/pulsar/include" )
-set( PULSAR_EXTRAS_INCLUDE_DIR "${PULSAR_ROOT}/libs/pulsar_extras/include" )
+set( STELLYRA_INCLUDE_DIR   "${STELLYRA_ROOT}/libs/stellyra/include" )
+set( STELLYRA_EXTRAS_INCLUDE_DIR "${STELLYRA_ROOT}/libs/stellyra_extras/include" )
 
 # ============================================================================
 # Google Benchmark
 #
-# Mirrors the pattern used by the Pulsar test suite: point at a local clone
+# Mirrors the pattern used by the Stellyra test suite: point at a local clone
 # rather than using FetchContent, to keep the build reproducible offline and
 # avoid TLS / threading issues that can surface when GTest drives benchmarks.
 #
@@ -34,7 +34,7 @@ set( PULSAR_EXTRAS_INCLUDE_DIR "${PULSAR_ROOT}/libs/pulsar_extras/include" )
 # Override with -DBENCHMARK_ROOT=<path> if yours is elsewhere.
 # ============================================================================
 
-set( BENCHMARK_ROOT "${PULSAR_ROOT}/../../googlebenchmark"
+set( BENCHMARK_ROOT "${STELLYRA_ROOT}/../../googlebenchmark"
 	CACHE PATH "Root of the google/benchmark repository" )
 
 set( BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE )
@@ -51,17 +51,17 @@ add_subdirectory( "${BENCHMARK_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/googlebenchma
 # repeating the boilerplate.
 #
 # Usage:
-#   add_pulsar_benchmark( <target> <source> [EXTRA_INCLUDES dir...] [DEFINES def...] )
+#   add_stellyra_benchmark( <target> <source> [EXTRA_INCLUDES dir...] [DEFINES def...] )
 # ============================================================================
 
-function( add_pulsar_benchmark target_name source_file )
+function( add_stellyra_benchmark target_name source_file )
 	cmake_parse_arguments( ARG "" "" "EXTRA_INCLUDES;DEFINES" ${ARGN} )
 
 	add_executable( ${target_name} ${source_file} )
 
 	target_include_directories( ${target_name} PRIVATE
-		"${PULSAR_INCLUDE_DIR}"
-		"${PULSAR_EXTRAS_INCLUDE_DIR}"
+		"${STELLYRA_INCLUDE_DIR}"
+		"${STELLYRA_EXTRAS_INCLUDE_DIR}"
 		"${CMAKE_CURRENT_SOURCE_DIR}/../common"
 		${ARG_EXTRA_INCLUDES}
 	)
@@ -102,7 +102,7 @@ add_subdirectory( bench_platform )
 # Per-library subdirectories
 # ============================================================================
 
-add_subdirectory( pulsar )
+add_subdirectory( stellyra )
 add_subdirectory( nano_signal_slot )
 add_subdirectory( sigslot )
 add_subdirectory( rocket )

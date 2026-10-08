@@ -1,4 +1,4 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
 // ===========================================================================
 // Runtime (non-NTTP) pointer-to-member disconnect-by-target, and the
@@ -21,7 +21,7 @@ namespace
 {
 	// two same-signature methods on one object: disconnect(receiver, method)
 	// must select by the method pointer, not the receiver alone
-	class TwoMethods : public pulsar::Trackable
+	class TwoMethods : public stellyra::Trackable
 	{
 	public:
 		int a = 0;
@@ -32,7 +32,7 @@ namespace
 	};
 
 	// a partial-arity receiver: onOne takes fewer arguments than the event
-	class PartialReceiver : public pulsar::Trackable
+	class PartialReceiver : public stellyra::Trackable
 	{
 	public:
 		int calls = 0;
@@ -62,9 +62,9 @@ template< typename MutexType >
 class DisconnectByTarget : public ::testing::Test {};
 
 using MutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::SharedMutex,
-	pulsar::platform::NullMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::SharedMutex,
+	stellyra::platform::NullMutex >;
 TYPED_TEST_SUITE( DisconnectByTarget, MutexTypes );
 
 // ---------------------------------------------------------------------------
@@ -86,7 +86,7 @@ TYPED_TEST( DisconnectByTarget, RuntimePmfRemovesConnection )
 	button->click( 2, 2 );
 	EXPECT_EQ( handler->callCount, 0 );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 0u );
 }
 
@@ -105,7 +105,7 @@ TYPED_TEST( DisconnectByTarget, RuntimePmfDiscriminatesByMethod )
 	EXPECT_EQ( obj->a, 0 );
 	EXPECT_EQ( obj->b, 1 );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 1u );
 }
 
@@ -146,9 +146,9 @@ TYPED_TEST( DisconnectByTarget, RuntimePmfTrackedPairForm )
 {
 	auto button = std::make_shared< TestButtonT< TypeParam > >();
 	PlainReceiver recv;         // not a Trackable
-	pulsar::Trackable anchor;   // separate lifetime anchor
+	stellyra::Trackable anchor;   // separate lifetime anchor
 
-	button->clicked.connect( pulsar::Tracked{ recv, anchor }, &PlainReceiver::onClick );
+	button->clicked.connect( stellyra::Tracked{ recv, anchor }, &PlainReceiver::onClick );
 	button->click( 1, 1 );
 	EXPECT_EQ( recv.calls, 1 );
 
@@ -173,7 +173,7 @@ TYPED_TEST( DisconnectByTarget, RuntimePmfNoMatchIsNoOp )
 	button->click( 1, 1 );
 	EXPECT_EQ( obj->a, 1 );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 1u );
 }
 
@@ -198,7 +198,7 @@ TYPED_TEST( DisconnectByTarget, SingleMatchRuntimePmf )
 	button->click( 2, 2 );
 	EXPECT_EQ( handler->callCount, 1 );  // one connection survives
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 1u );
 }
 
@@ -219,7 +219,7 @@ TYPED_TEST( DisconnectByTarget, SingleMatchNttpMethod )
 	button->click( 2, 2 );
 	EXPECT_EQ( handler->callCount, 1 );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 1u );
 }
 
@@ -240,7 +240,7 @@ TYPED_TEST( DisconnectByTarget, SingleMatchRuntimeFree )
 	button->click( 2, 2 );
 	EXPECT_EQ( _freeCallsA, 1 );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 1u );
 }
 
@@ -261,6 +261,6 @@ TYPED_TEST( DisconnectByTarget, SingleMatchNttpFree )
 	button->click( 2, 2 );
 	EXPECT_EQ( _freeCallsB, 1 );
 
-	auto inspector = kmac::pulsar::EventInspector( button->clicked );
+	auto inspector = kmac::stellyra::EventInspector( button->clicked );
 	EXPECT_EQ( inspector.getEventInfo().activeConnectionCount, 1u );
 }

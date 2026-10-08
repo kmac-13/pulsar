@@ -1,4 +1,4 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
 // ---------------------------------------------------------------------------
 // Combining Events and Connection Groups
@@ -6,10 +6,10 @@
 
 TEST( CombiningAndGroups, CombiningEventLogicalAnd )
 {
-	class TestObject : public pulsar::Trackable
+	class TestObject : public stellyra::Trackable
 	{
 	public:
-		pulsar::CombiningEvent< pulsar::Combiners::LogicalAnd<>, bool, int > validate{ this };
+		stellyra::CombiningEvent< stellyra::Combiners::LogicalAnd<>, bool, int > validate{ this };
 	};
 
 	auto obj = std::make_unique< TestObject >();
@@ -27,7 +27,7 @@ TEST( CombiningAndGroups, CombiningEventLogicalAndWithCheckers )
 	auto checker1 = std::make_unique< Checker >();
 	auto checker2 = std::make_unique< Checker >();
 
-	pulsar::CombiningEvent< pulsar::Combiners::LogicalAnd<>, bool, std::string > validate{ nullptr };
+	stellyra::CombiningEvent< stellyra::Combiners::LogicalAnd<>, bool, std::string > validate{ nullptr };
 
 	validate.connectLambda( [ c = checker1.get() ]( const std::string& s ) { return c->check( s ); } );
 	validate.connectLambda( [ c = checker2.get() ]( const std::string& s ) { return c->check( s ); } );
@@ -47,10 +47,10 @@ TEST( CombiningAndGroups, CombiningEventLogicalAndWithCheckers )
 
 TEST( CombiningAndGroups, CombiningEventLogicalOr )
 {
-	class TestObject : public pulsar::Trackable
+	class TestObject : public stellyra::Trackable
 	{
 	public:
-		pulsar::CombiningEvent< pulsar::Combiners::LogicalOr<>, bool, std::string > validate{ this };
+		stellyra::CombiningEvent< stellyra::Combiners::LogicalOr<>, bool, std::string > validate{ this };
 	};
 
 	auto obj = std::make_unique< TestObject >();
@@ -79,7 +79,7 @@ TEST( CombiningAndGroups, ScopedConnection )
 	auto handler = std::make_unique< TestHandler >();
 
 	{
-		pulsar::ScopedConnection scoped( button->clicked.connect( *handler, &TestHandler::onClicked ) );
+		stellyra::ScopedConnection scoped( button->clicked.connect( *handler, &TestHandler::onClicked ) );
 
 		button->click( 1, 1 );
 		EXPECT_EQ( handler->callCount, 1 );
@@ -97,7 +97,7 @@ TEST( CombiningAndGroups, ScopedConnectionAutoDisconnect )
 	auto handler = std::make_unique< TestHandler >();
 
 	{
-		pulsar::ScopedConnection scoped( button->clicked.connect( *handler, &TestHandler::onClicked ) );
+		stellyra::ScopedConnection scoped( button->clicked.connect( *handler, &TestHandler::onClicked ) );
 
 		button->click( 1, 1 );
 		EXPECT_EQ( handler->callCount, 1 );
@@ -114,7 +114,7 @@ TEST( CombiningAndGroups, ConnectionGroups )
 	auto button = std::make_unique< TestButton >();
 	auto handler = std::make_unique< TestHandler >();
 
-	pulsar::ConnectionGroup group;
+	stellyra::ConnectionGroup group;
 	group += button->clicked.connect( *handler, &TestHandler::onClicked );
 	group += button->clicked.connect( *handler, &TestHandler::onClicked );
 	group += button->clicked.connect( *handler, &TestHandler::onClicked );
@@ -138,7 +138,7 @@ TEST( CombiningAndGroups, ConnectionGroupBlocking )
 	auto button = std::make_unique< TestButton >();
 	auto handler = std::make_unique< TestHandler >();
 
-	pulsar::ConnectionGroup group;
+	stellyra::ConnectionGroup group;
 	group += button->clicked.connect( *handler, &TestHandler::onClicked );
 	group += button->clicked.connect( *handler, &TestHandler::onClicked );
 

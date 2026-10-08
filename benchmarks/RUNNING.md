@@ -1,4 +1,4 @@
-# Running the Pulsar Benchmarks
+# Running the Stellyra Benchmarks
 
 ## Prerequisites
 
@@ -19,7 +19,7 @@ All other libraries (nano-signal-slot, sigslot, rocket, nod, vdk-signals) are fe
 
 ```
 <workspace>/
-    pulsar/               ← this repo
+    stellyra/               ← this repo
     google-benchmark/     ← clone of github.com/google/benchmark
 ```
 
@@ -30,7 +30,7 @@ If your google-benchmark clone is elsewhere, pass `-DBENCHMARK_ROOT=<path>` to C
 ## Build (Windows, Git Bash or Developer Command Prompt)
 
 ```bash
-cd pulsar/benchmarks
+cd stellyra/benchmarks
 
 cmake -B build \
     -DCMAKE_BUILD_TYPE=Release \
@@ -47,7 +47,7 @@ cmake --build build --config Release
 
 ## One-step: run everything and aggregate
 
-`run_benchmarks.sh` runs every built executable with JSON output and calls `compare.py` automatically.  From `pulsar/benchmarks/`:
+`run_benchmarks.sh` runs every built executable with JSON output and calls `compare.py` automatically.  From `stellyra/benchmarks/`:
 
 ```bash
 ./run_benchmarks.sh build/Desktop_Qt_6_9_0_MinGW_64_bit-Release
@@ -73,23 +73,23 @@ Create a `results/` directory first:
 ```bash
 mkdir -p results
 
-./Release/bench_pulsar_ts.exe  --benchmark_format=json --benchmark_out=results/pulsar_ts.json
-./Release/bench_pulsar_st.exe  --benchmark_format=json --benchmark_out=results/pulsar_st.json
-./Release/bench_nano_st.exe    --benchmark_format=json --benchmark_out=results/nano_st.json
-./Release/bench_nano_ts.exe    --benchmark_format=json --benchmark_out=results/nano_ts.json
-./Release/bench_sigslot_st.exe --benchmark_format=json --benchmark_out=results/sigslot_st.json
-./Release/bench_sigslot_mt.exe --benchmark_format=json --benchmark_out=results/sigslot_mt.json
-./Release/bench_rocket_st.exe  --benchmark_format=json --benchmark_out=results/rocket_st.json
-./Release/bench_rocket_ts.exe  --benchmark_format=json --benchmark_out=results/rocket_ts.json
-./Release/bench_nod.exe        --benchmark_format=json --benchmark_out=results/nod.json
-./Release/bench_vdk_st.exe     --benchmark_format=json --benchmark_out=results/vdk_st.json
-./Release/bench_vdk_ts.exe     --benchmark_format=json --benchmark_out=results/vdk_ts.json
+./Release/bench_stellyra_ts.exe  --benchmark_format=json --benchmark_out=results/stellyra_ts.json
+./Release/bench_Stellyra_st.exe  --benchmark_format=json --benchmark_out=results/stellyra_st.json
+./Release/bench_nano_st.exe      --benchmark_format=json --benchmark_out=results/nano_st.json
+./Release/bench_nano_ts.exe      --benchmark_format=json --benchmark_out=results/nano_ts.json
+./Release/bench_sigslot_st.exe   --benchmark_format=json --benchmark_out=results/sigslot_st.json
+./Release/bench_sigslot_mt.exe   --benchmark_format=json --benchmark_out=results/sigslot_mt.json
+./Release/bench_rocket_st.exe    --benchmark_format=json --benchmark_out=results/rocket_st.json
+./Release/bench_rocket_ts.exe    --benchmark_format=json --benchmark_out=results/rocket_ts.json
+./Release/bench_nod.exe          --benchmark_format=json --benchmark_out=results/nod.json
+./Release/bench_vdk_st.exe       --benchmark_format=json --benchmark_out=results/vdk_st.json
+./Release/bench_vdk_ts.exe       --benchmark_format=json --benchmark_out=results/vdk_ts.json
 
 # If Qt6 was found:
-./Release/bench_qt.exe         --benchmark_format=json --benchmark_out=results/qt.json
+./Release/bench_qt.exe           --benchmark_format=json --benchmark_out=results/qt.json
 
 # If libsigc++ was found:
-./Release/bench_libsigcpp.exe  --benchmark_format=json --benchmark_out=results/libsigcpp.json
+./Release/bench_libsigcpp.exe    --benchmark_format=json --benchmark_out=results/libsigcpp.json
 ```
 
 **Important:** Run benchmarks on a quiet system.  Close browsers, background apps, and antivirus scans during measurement.  Each executable runs its own warmup and timing loop internally via Google Benchmark; no special steps are needed beyond ensuring the machine is not under load.
@@ -114,13 +114,13 @@ Google Benchmark accepts several useful flags:
 
 ```bash
 # Run only a specific scenario:
-bench_pulsar_ts.exe --benchmark_filter=BM_Emit_1Connection
+bench_stellyra_ts.exe --benchmark_filter=BM_Emit_1Connection
 
 # Control iteration count (default is auto-tuned):
-bench_pulsar_ts.exe --benchmark_min_time=2s
+bench_stellyra_ts.exe --benchmark_min_time=2s
 
 # Run in-process multiple times and report min/mean/stddev:
-bench_pulsar_ts.exe --benchmark_repetitions=5 --benchmark_report_aggregates_only=true
+bench_stellyra_ts.exe --benchmark_repetitions=5 --benchmark_report_aggregates_only=true
 ```
 
 ---

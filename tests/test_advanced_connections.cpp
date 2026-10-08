@@ -1,4 +1,4 @@
-#include "test_helpers.hpp"
+#include "test_helpers.h"
 
 // ---------------------------------------------------------------------------
 // Advanced Connections
@@ -17,15 +17,15 @@ template< typename MutexType >
 class AdvancedConnections : public ::testing::Test {};
 
 using MutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::SharedMutex,
-	pulsar::platform::NullMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::SharedMutex,
+	stellyra::platform::NullMutex >;
 TYPED_TEST_SUITE( AdvancedConnections, MutexTypes );
 
 TYPED_TEST( AdvancedConnections, SamePriorityFIFO )
 {
 	auto button = std::make_unique< TestButtonT< TypeParam > >();
-	auto receiver = std::make_unique< pulsar::Trackable >();
+	auto receiver = std::make_unique< stellyra::Trackable >();
 
 	std::vector< std::string > order;
 
@@ -92,7 +92,7 @@ TYPED_TEST( AdvancedConnections, ConnectionBlocking )
 TYPED_TEST( AdvancedConnections, PriorityExecutionOrder )
 {
 	auto button = std::make_unique< TestButtonT< TypeParam > >();
-	auto receiver = std::make_unique< pulsar::Trackable >();
+	auto receiver = std::make_unique< stellyra::Trackable >();
 
 	std::vector< int > order;
 
@@ -117,7 +117,7 @@ TYPED_TEST( AdvancedConnections, PriorityExecutionOrder )
 TYPED_TEST( AdvancedConnections, PriorityWithDynamicConnections )
 {
 	auto button = std::make_unique< TestButtonT< TypeParam > >();
-	auto receiver = std::make_unique< pulsar::Trackable >();
+	auto receiver = std::make_unique< stellyra::Trackable >();
 
 	std::vector< std::string > order;
 
@@ -179,7 +179,7 @@ TYPED_TEST( AdvancedConnections, NTTPFreeFunctionPriority )
 TYPED_TEST( AdvancedConnections, MixedPriorityAndDefaultOrdering )
 {
 	auto button = std::make_unique< TestButtonT< TypeParam > >();
-	auto receiver = std::make_unique< pulsar::Trackable >();
+	auto receiver = std::make_unique< stellyra::Trackable >();
 
 	std::vector< int > order;
 
@@ -232,8 +232,8 @@ template< typename MutexType >
 class AdvancedConnectionsRestricted : public ::testing::Test {};
 
 using RestrictedMutexTypes = ::testing::Types<
-	pulsar::platform::RecursiveMutex,
-	pulsar::platform::NullMutex >;
+	stellyra::platform::RecursiveMutex,
+	stellyra::platform::NullMutex >;
 TYPED_TEST_SUITE( AdvancedConnectionsRestricted, RestrictedMutexTypes );
 
 TYPED_TEST( AdvancedConnectionsRestricted, SingleShotConnection )
@@ -259,11 +259,11 @@ TYPED_TEST( AdvancedConnectionsRestricted, SingleShotConnection )
 TYPED_TEST( AdvancedConnectionsRestricted, ReentrantConnectDuringPriorityDispatch )
 {
 	auto button = std::make_unique< TestButtonT< TypeParam > >();
-	auto receiver = std::make_shared< pulsar::Trackable >();  // can't be unique_ptr due to capturing lambda
+	auto receiver = std::make_shared< stellyra::Trackable >();  // can't be unique_ptr due to capturing lambda
 
 	std::vector< int > order;
 	bool added = false;
-	pulsar::Connection addedConn;
+	stellyra::Connection addedConn;
 
 	button->clicked.connectLambda( *receiver, [ &, receiver ]( int, int ) {
 		order.push_back( 5 );
@@ -290,10 +290,10 @@ TYPED_TEST( AdvancedConnectionsRestricted, ReentrantConnectDuringPriorityDispatc
 TYPED_TEST( AdvancedConnectionsRestricted, ReentrantDisconnectDuringPriorityDispatch )
 {
 	auto button = std::make_unique< TestButtonT< TypeParam > >();
-	auto receiver = std::make_unique< pulsar::Trackable >();
+	auto receiver = std::make_unique< stellyra::Trackable >();
 
 	std::vector< int > order;
-	pulsar::Connection selfConn;
+	stellyra::Connection selfConn;
 
 	selfConn = button->clicked.connectLambda( *receiver, [ &order, &selfConn ]( int, int ) {
 		order.push_back( 10 );

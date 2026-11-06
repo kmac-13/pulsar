@@ -22,21 +22,26 @@
  *   connect
  *       - object/method connections: NTTP method pointer, runtime
  *         pointer-to-member-function, with or without an explicit
- *         Tracked<T> tracker; the NTTP forms also accept methods
- *         that take only a leading prefix of Args... (partial argument
- *         matching), dropping the trailing arguments automatically
+ *         Tracked<T> tracker; both forms accept methods that take only
+ *         a leading prefix of Args... (partial argument matching),
+ *         dropping the trailing arguments automatically - via
+ *         createPartial for the NTTP form, PmfInvoker for the runtime
+ *         form
  *
  *   connectFree
  *       - free function connections: NTTP function pointer or runtime
  *         function pointer, with or without an explicit Trackable tracker
  *         that bounds the connection's lifetime (a free function has no
- *         receiver of its own to track); the NTTP forms support partial
- *         argument matching the same way as the object/method bucket
+ *         receiver of its own to track); only the NTTP form supports
+ *         partial argument matching (via createPartial) - the runtime
+ *         form's function-pointer parameter is pinned to the event's
+ *         exact Args..., with no way to express a shorter signature
  *
  *   connectLambda
  *       - capturing lambda / arbitrary functor connections, either as a
  *         pre-wrapped Callable or as a raw functor that gets wrapped
- *         internally; always takes an explicit Trackable& tracker
+ *         internally; always takes an explicit Trackable& tracker; lambda
+ *         handlers require full argument matching
  *
  * disconnect() is split the same way: disconnect/disconnectFree by target,
  * plus the tracker- and disconnectAll()-based forms that apply across all

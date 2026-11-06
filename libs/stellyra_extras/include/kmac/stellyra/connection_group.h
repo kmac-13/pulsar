@@ -30,11 +30,6 @@
  *
  * ConnectionGroup is move-only (non-copyable).
  *
- * @note blockAll() / unblockAll() are declared but not yet implemented.
- *   Per-connection blocking will be re-integrated in a future update once
- *   the HandlerEntry flags are extended to carry a per-slot blocked bit.
- *   Event-level blocking is available now via event.block() / event.blockGuard().
- *
  * @see ScopedConnection for managing a single connection with RAII
  */
 

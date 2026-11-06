@@ -25,33 +25,33 @@ project( Stellyra
 # Header-only; no compilation units.
 # ============================================================================
 
-add_library( Stellyra INTERFACE )
-add_library( Stellyra::Stellyra ALIAS Stellyra )
+add_library( KMac_Stellyra INTERFACE )
+add_library( Stellyra::Stellyra ALIAS KMac_Stellyra )
 
-target_compile_features( Stellyra INTERFACE cxx_std_17 )
+target_compile_features( KMac_Stellyra INTERFACE cxx_std_17 )
 
-target_include_directories( Stellyra INTERFACE
+target_include_directories( KMac_Stellyra INTERFACE
 	$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/libs/stellyra/include>
 	$<INSTALL_INTERFACE:include>
 )
 
 # ============================================================================
-# StellyraExtras interface target
+# KMac_StellyraExtras interface target
 # Header-only; no compilation units.
 # ============================================================================
 
-add_library( StellyraExtras INTERFACE )
-add_library( Stellyra::Extras ALIAS StellyraExtras )
+add_library( KMac_StellyraExtras INTERFACE )
+add_library( Stellyra::Extras ALIAS KMac_StellyraExtras )
 
-target_compile_features( StellyraExtras INTERFACE cxx_std_17 )
+target_compile_features( KMac_StellyraExtras INTERFACE cxx_std_17 )
 
-target_include_directories( StellyraExtras INTERFACE
+target_include_directories( KMac_StellyraExtras INTERFACE
 	$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/libs/stellyra_extras/include>
 	$<INSTALL_INTERFACE:include>
 )
 
 # Extras depends on core
-target_link_libraries( StellyraExtras INTERFACE Stellyra )
+target_link_libraries( KMac_StellyraExtras INTERFACE KMac_Stellyra )
 
 # ============================================================================
 # Optional compile-time feature flags
@@ -68,19 +68,19 @@ target_link_libraries( StellyraExtras INTERFACE Stellyra )
 # <mutex>/<shared_mutex> are not included.
 option( STELLYRA_THREAD_SAFE "Enable thread-safe locking throughout Stellyra" ON )
 if( NOT STELLYRA_THREAD_SAFE )
-	target_compile_definitions( Stellyra INTERFACE STELLYRA_THREAD_SAFE=0 )
+	target_compile_definitions( KMac_Stellyra INTERFACE STELLYRA_THREAD_SAFE=0 )
 endif()
 
 # Enable std::thread-based auto-processed EventLoop (disable for bare-metal)
 option( STELLYRA_ENABLE_THREAD "Enable std::thread support in EventLoop" ON )
 if( NOT STELLYRA_ENABLE_THREAD )
-	target_compile_definitions( Stellyra INTERFACE STELLYRA_ENABLE_THREAD=0 )
+	target_compile_definitions( KMac_Stellyra INTERFACE STELLYRA_ENABLE_THREAD=0 )
 endif()
 
 # Enable connection misconfiguration warnings (off by default)
 option( STELLYRA_LOG_CONNECTION_ISSUES "Enable connection misconfiguration warnings" OFF )
 if( STELLYRA_LOG_CONNECTION_ISSUES )
-	target_compile_definitions( Stellyra INTERFACE STELLYRA_LOG_CONNECTION_ISSUES=1 )
+	target_compile_definitions( KMac_Stellyra INTERFACE STELLYRA_LOG_CONNECTION_ISSUES=1 )
 endif()
 
 # ============================================================================
@@ -110,7 +110,7 @@ include( GNUInstallDirs )
 include( CMakePackageConfigHelpers )
 
 install(
-	TARGETS Stellyra StellyraExtras
+	TARGETS KMac_Stellyra KMac_StellyraExtras
 	EXPORT  StellyraTargets
 )
 

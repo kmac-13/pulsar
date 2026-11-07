@@ -732,7 +732,7 @@ void BasicEventImpl< MutexType, Args... >::dispatch( Args... args )
 	// capturedArgs, ensureCapture, and dispatchEntry are shared between the
 	// SharedLock and exclusive slow paths; defined here once to avoid
 	// duplication - both slow paths hold an exclusive lock by the time they
-	// use these, so the captures are safe.
+	// use these, so the captures are safe
 	std::shared_ptr< void > capturedArgs;
 
 	auto ensureCapture = [ & ] {
@@ -747,7 +747,7 @@ void BasicEventImpl< MutexType, Args... >::dispatch( Args... args )
 	// may reentrantly connect(), and a reentrant connect can push_back
 	// (reallocating the vector) even though it defers the *sorted*
 	// placement; re-indexing via `slot` after such a call is always safe,
-	// holding a stale reference across it is not.
+	// holding a stale reference across it is not
 	auto dispatchEntry = [ & ]( uint32_t slot ) {
 		if ( ! handlers[ slot ].flags.isDispatchReady() )
 		{
@@ -797,15 +797,22 @@ void BasicEventImpl< MutexType, Args... >::dispatch( Args... args )
 		case ResolvedConnectionType::Deferred:
 		{
 			ensureCapture();
-			const auto w = weakSelf;
-			const uint32_t ch = slot;
-			const uint32_t cg = handlers[ slot ].generation;
+
+			// lock the weakSelf now during dispatch and pass the shared pointer
+			// to the task by value to ensure the impl remains valid for at
+			// least until the posted task is drained regardless of whether
+			// the associated event is still valid or not;
+			// NOTE that the same strong reference requirement is needed for:
+			// - BasicEvent::operator()
+			// - BasicConcurrentEventImpl::dispatch
+			// - BasicConcurrentEvent::operator()
+			// - BasicRecordableEvent::operator()
+			auto self = weakSelf.lock();
+			const uint32_t idx = slot;
+			const uint32_t gen = handlers[ slot ].generation;
 			handlers[ slot ].receiverLoop->post( Task::create(
-				[ w, ch, cg, capturedArgs ]() {
-					if ( auto impl = w.lock() )
-					{
-						impl->invokeDeferred( ch, cg, capturedArgs );
-					}
+				[ self, idx, gen, capturedArgs ]() {
+					self->invokeDeferred( idx, gen, capturedArgs );
 				} ), handlers[ slot ].connectionTag );
 			break;
 		}

@@ -578,7 +578,7 @@ inline void BasicConcurrentEventImpl< MutexType, Args... >::dispatch( Args... ar
 			// receiver's EventLoop never sees the task. Receiver-context
 			// predicates are re-evaluated in invokeDeferred() on the
 			// receiving loop's drain instead - see connection_type.h's
-			// PredicateContext docs.
+			// PredicateContext docs
 			if ( entry->hasPredicate
 				&& ! entry->isReceiverContextPredicate
 				&& ! entry->predicate( args... ) )
@@ -587,16 +587,23 @@ inline void BasicConcurrentEventImpl< MutexType, Args... >::dispatch( Args... ar
 			}
 
 			ensureCapture();
-			platform::WeakPtr< EventImplBase > w = weakSelf;
+
+			// lock the weakSelf now during dispatch and pass the shared pointer
+			// to the task by value to ensure the impl remains valid for at
+			// least until the posted task is drained regardless of whether
+			// the associated event is still valid or not;
+			// NOTE that the same strong reference requirement is needed for:
+			// - BasicEventImpl::dispatch
+			// - BasicEvent::operator()
+			// - BasicConcurrentEvent::operator()
+			// - BasicRecordableEvent::operator()
+			auto self = weakSelf.lock();
 			const uint32_t index = i;
 			const uint32_t generation = entry->generation;
 			entry->receiverLoop.load( std::memory_order_acquire )->post(
 				EventLoop::Task::create(
-					[ w, index, generation, capturedArgs ]() {
-						if ( auto impl = w.lock() )
-						{
-							impl->invokeDeferred( index, generation, capturedArgs );
-						}
+					[ self, index, generation, capturedArgs ]() {
+						self->invokeDeferred( index, generation, capturedArgs );
 					} ),
 				entry->connectionTag );
 			break;

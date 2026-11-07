@@ -52,16 +52,16 @@ enable_testing()
 
 # Collect Stellyra files
 file( GLOB STELLYRA_SOURCES
-	${CMAKE_SOURCE_DIR}/../libs/stellyra/include/kmac/*.h
-	${CMAKE_SOURCE_DIR}/../libs/stellyra/include/kmac/stellyra/*.h
-	${CMAKE_SOURCE_DIR}/../libs/stellyra_extras/include/kmac/*.h
-	${CMAKE_SOURCE_DIR}/../libs/stellyra_extras/include/kmac/stellyra/*.h
+	${CMAKE_CURRENT_SOURCE_DIR}/../libs/stellyra/include/kmac/*.h
+	${CMAKE_CURRENT_SOURCE_DIR}/../libs/stellyra/include/kmac/stellyra/*.h
+	${CMAKE_CURRENT_SOURCE_DIR}/../libs/stellyra_extras/include/kmac/*.h
+	${CMAKE_CURRENT_SOURCE_DIR}/../libs/stellyra_extras/include/kmac/stellyra/*.h
 )
 
 # Collect Stellyra documents
 file( GLOB STELLYRA_DOCS
-	${CMAKE_SOURCE_DIR}/../*.md
-	${CMAKE_SOURCE_DIR}/../docs/*.md
+	${CMAKE_CURRENT_SOURCE_DIR}/../*.md
+	${CMAKE_CURRENT_SOURCE_DIR}/../docs/*.md
 )
 
 
@@ -72,9 +72,9 @@ function( add_stellyra_test test_name source_file )
 	add_executable( ${test_name} ${source_file} ${STELLYRA_SOURCES} ${STELLYRA_DOCS} )
 
 	target_include_directories( ${test_name} PRIVATE
-		${CMAKE_SOURCE_DIR}/../libs/stellyra/include
-		${CMAKE_SOURCE_DIR}/../libs/stellyra_extras/include
-		${CMAKE_SOURCE_DIR}/..
+		${CMAKE_CURRENT_SOURCE_DIR}/../libs/stellyra/include
+		${CMAKE_CURRENT_SOURCE_DIR}/../libs/stellyra_extras/include
+		${CMAKE_CURRENT_SOURCE_DIR}/..
 	)
 
 	target_link_libraries( ${test_name} PRIVATE GTest::gtest GTest::gtest_main )

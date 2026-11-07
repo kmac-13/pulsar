@@ -99,19 +99,23 @@ inline void BasicEvent< MutexType, Args... >::operator()( Args... args )
 			std::make_shared< std::tuple< std::decay_t< Args >... > >(
 				std::forward< Args >( args )... );
 
-		platform::WeakPtr< typename Base::EventImpl > w( this->_impl );
+		// pass the shared pointer to the task by value to ensure the impl
+		// remains valid for at least until the posted task is drained
+		// regardless of whether the event is still valid or not;
+		// NOTE that the same strong reference requirement is needed for:
+		// - BasicEventImpl::dispatch
+		// - BasicConcurrentEventImpl::dispatch
+		// - BasicConcurrentEvent::operator()
+		// - BasicRecordableEvent::operator()
+		auto self = this->_impl;
 		senderLoop->post(
 			EventLoop::Task::create(
-				[ w, capturedArgs ]() {
-					if ( auto impl = w.lock() )
-					{
-						std::apply(
-							[ &impl ]( auto&&... a ) {
-								impl->dispatch(
-									std::forward< decltype( a ) >( a )... );
-							},
-							*capturedArgs );
-					}
+				[ self, capturedArgs ]() {
+					std::apply(
+						[ &self ]( auto&&... a ) {
+							self->dispatch( std::forward< decltype( a ) >( a )... );
+						},
+						*capturedArgs );
 				} ),
 			this->_impl->id );
 		return;

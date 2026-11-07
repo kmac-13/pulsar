@@ -1,0 +1,145 @@
+name: Build / Hosted
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  build:
+    name: ${{ matrix.name }} / ${{ matrix.build_type }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [ Debug, Release ]
+        include:
+          # -- Linux ----------------------------------------------------------
+          - name: Linux / GCC-13
+            os: ubuntu-24.04
+            cc: gcc-13
+            cxx: g++-13
+            install: sudo apt-get install -y gcc-13 g++-13
+
+          - name: Linux / Clang-18
+            os: ubuntu-24.04
+            cc: clang-18
+            cxx: clang++-18
+            install: sudo apt-get install -y clang-18
+
+          # -- macOS ----------------------------------------------------------
+          # Apple Clang is pre-installed; no extra install step needed
+          - name: macOS / Apple Clang
+            os: macos-14
+            cc: clang
+            cxx: clang++
+            install: ""
+
+          # -- Windows --------------------------------------------------------
+          # MSVC is pre-installed on windows-latest runners.
+          - name: Windows / MSVC
+            os: windows-latest
+            toolchain: msvc
+            cc: ""
+            cxx: ""
+            install: ""
+
+          # MinGW is the authoritative correctness gate (see learnings.md:
+          # fixes that pass on Linux but fail on Windows/MinGW Debug are not
+          # considered fixed) - not just a second Windows compiler alongside
+          # MSVC. Installed via msys2 rather than pre-installed on the runner.
+          - name: Windows / MinGW
+            os: windows-latest
+            toolchain: mingw
+            cc: gcc
+            cxx: g++
+            install: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install compiler (Linux)
+        if: runner.os == 'Linux' && matrix.install != ''
+        run: |
+          sudo apt-get update -qq
+          ${{ matrix.install }}
+
+      - name: Install compiler (macOS)
+        if: runner.os == 'macOS' && matrix.install != ''
+        run: ${{ matrix.install }}
+
+      - name: Set up MinGW (Windows / MinGW)
+        if: matrix.toolchain == 'mingw'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+
+      - name: Set up CMake
+        if: matrix.toolchain != 'mingw'
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.28'
+
+      - name: Configure (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_C_COMPILER=${{ matrix.cc }} \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+            -DSTELLYRA_BUILD_TESTS=ON \
+            -DSTELLYRA_FETCH_GOOGLETEST=ON
+
+      - name: Configure (Windows / MSVC)
+        if: matrix.toolchain == 'msvc'
+        run: |
+          cmake -B build `
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} `
+            -DSTELLYRA_BUILD_TESTS=ON `
+            -DSTELLYRA_FETCH_GOOGLETEST=ON
+
+      # MinGW's own cmake/ninja/gcc are only on PATH inside the msys2 shell -
+      # a plain pwsh/bash step (as the other legs use) wouldn't find them.
+      - name: Configure (Windows / MinGW)
+        if: matrix.toolchain == 'mingw'
+        shell: msys2 {0}
+        run: |
+          cmake -G Ninja -B build \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_C_COMPILER=${{ matrix.cc }} \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+            -DSTELLYRA_BUILD_TESTS=ON \
+            -DSTELLYRA_FETCH_GOOGLETEST=ON
+
+      - name: Build
+        if: matrix.toolchain != 'mingw'
+        run: cmake --build build --config ${{ matrix.build_type }} --parallel
+
+      - name: Build (Windows / MinGW)
+        if: matrix.toolchain == 'mingw'
+        shell: msys2 {0}
+        run: cmake --build build --parallel
+
+      # NOTE: --test-dir is build/tests, not build. The top-level CMakeLists.txt
+      # does not itself call enable_testing()/include(CTest) - only
+      # tests/CMakeLists.txt does, inside the STELLYRA_BUILD_TESTS block - so no
+      # root CTestTestfile.cmake is generated, and `ctest --test-dir build`
+      # reports "No tests were found!!!" despite the test binaries existing and
+      # passing when run directly. Verified locally: pointing ctest at
+      # build/tests (where tests/CMakeLists.txt's enable_testing() actually
+      # lives) finds and runs all 704 tests.
+      - name: Test
+        if: matrix.toolchain != 'mingw'
+        run: ctest --test-dir build/tests --build-config ${{ matrix.build_type }} --output-on-failure --parallel 4
+
+      - name: Test (Windows / MinGW)
+        if: matrix.toolchain == 'mingw'
+        shell: msys2 {0}
+        run: ctest --test-dir build/tests --output-on-failure --parallel 4

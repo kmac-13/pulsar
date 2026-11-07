@@ -103,6 +103,22 @@ struct Receiver : stellyra::Trackable
 	// not a no-op call through a dangling-but-unused this pointer
 	std::atomic< long long > total{ 0 };
 
+	// explicit disconnectAll() call since the Trackable destructor calling
+	// it would be too late for () runs once
+	// this destructor's body and all of Receiver's own members are already
+	// gone. disconnectHandler() (called from here) and invokeDeferred()
+	// (called by the drainer) both serialize on the same EventImpl mutex,
+	// so calling disconnectAll() here blocks until any dispatch already
+	// in flight against this object finishes, and prevents a new one from
+	// starting - closing the window this test exists to exercise. See
+	// trackable.h's ordering section for why this is necessary and what it
+	// does not cover (a destructor with real work before this call would
+	// still be unprotected during that work).
+	~Receiver()
+	{
+		disconnectAll();
+	}
+
 	void onFired( int v )
 	{
 		total.fetch_add( v, std::memory_order_relaxed );
@@ -135,7 +151,7 @@ TYPED_TEST( DeferredTeardownOrderTest, SurvivesReceiverDestroyedBeforeDrainer )
 		TypeParam sender;
 
 		// deliberately backwards: receivers (declared last) destructs
-		// FIRST, before drainers' final-drain destructor runs. This is
+		// FIRST, before drainers' final-drain destructor runs; this is
 		// the exact property under test, matching the ordering
 		// deliberately kept in the benchmark suite
 		std::list< stellyra::EventLoop > loops;

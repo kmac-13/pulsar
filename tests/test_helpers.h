@@ -67,22 +67,26 @@ public:
 class TestHandler : public stellyra::Trackable
 {
 public:
-	int callCount = 0;
-	int lastX = 0;
-	int lastY = 0;
+	// SharedEvent dispatches concurrently across emitting threads by
+	// design (see ThreadSafety's SharedMutex case), so these must survive
+	// concurrent writes from onClicked() running on more than one thread
+	// at once (a plain int here would be a data race)
+	std::atomic< int > callCount{ 0 };
+	std::atomic< int > lastX{ 0 };
+	std::atomic< int > lastY{ 0 };
 
 	void onClicked( int x, int y )
 	{
-		callCount++;
-		lastX = x;
-		lastY = y;
+		callCount.fetch_add( 1, std::memory_order_relaxed );
+		lastX.store( x, std::memory_order_relaxed );
+		lastY.store( y, std::memory_order_relaxed );
 	}
 
 	void reset()
 	{
-		callCount = 0;
-		lastX = 0;
-		lastY = 0;
+		callCount.store( 0, std::memory_order_relaxed );
+		lastX.store( 0, std::memory_order_relaxed );
+		lastY.store( 0, std::memory_order_relaxed );
 	}
 };
 

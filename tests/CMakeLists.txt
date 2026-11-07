@@ -20,19 +20,32 @@ add_definitions( -DSTELLYRA_TEST_INJECT )
 # ---------------------------------------------------------------------------
 # GoogleTest
 # Fetched from source so there is no external dependency to install.
+#
+# Local development builds use an already-checked-out sibling googletest
+# directory (fast, no network dependency).  CI runners have no such sibling
+# checkout, so they pass -DSTELLYRA_FETCH_GOOGLETEST=ON to pull it via
+# FetchContent instead - the local default is unchanged either way.
 # ---------------------------------------------------------------------------
-# include(FetchContent)
+option( STELLYRA_FETCH_GOOGLETEST "Fetch GoogleTest via FetchContent instead of the local ../../../googletest checkout" OFF )
 
-# FetchContent_Declare(
-#     googletest
-#     GIT_REPOSITORY https://github.com/google/googletest.git
-#     GIT_TAG        v1.14.0
-# )
-add_subdirectory( "../../../googletest/" ${CMAKE_CURRENT_BINARY_DIR}/googletest )
+if( STELLYRA_FETCH_GOOGLETEST )
+	include( FetchContent )
 
-# prevent GTest from overriding our compiler/linker settings on Windows
-set( gtest_force_shared_crt ON CACHE BOOL "" FORCE )
-# FetchContent_MakeAvailable(googletest)
+	FetchContent_Declare(
+		googletest
+		GIT_REPOSITORY https://github.com/google/googletest.git
+		GIT_TAG        v1.14.0
+	)
+
+	# prevent GTest from overriding our compiler/linker settings on Windows
+	set( gtest_force_shared_crt ON CACHE BOOL "" FORCE )
+	FetchContent_MakeAvailable( googletest )
+else()
+	add_subdirectory( "../../../googletest/" ${CMAKE_CURRENT_BINARY_DIR}/googletest )
+
+	# prevent GTest from overriding our compiler/linker settings on Windows
+	set( gtest_force_shared_crt ON CACHE BOOL "" FORCE )
+endif()
 
 include( GoogleTest )
 enable_testing()
